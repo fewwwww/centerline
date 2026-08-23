@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="上传卡牌图片，手动调整八条参考线，实时测量左右与上下居中比例。图片仅在浏览器本地处理。"
+    />
+    <meta name="theme-color" content="#f2f0e9" />
+    <title>卡牌居中测量器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./" aria-label="卡牌居中测量器首页">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </span>
+          <span>CENTERLINE</span>
+        </a>
+        <div class="privacy-chip" title="图片不会上传服务器">
+          <span class="icon-lock" aria-hidden="true"></span>
+          本地处理
+        </div>
+      </header>
+
+      <main>
+        <section class="upload-view view" id="upload-view" aria-labelledby="upload-title">
+          <div class="hero-copy">
+            <p class="eyebrow">CARD CENTERING · MANUAL TOOL</p>
+            <h1 id="upload-title">看清每一毫米之前，<br />先看清两边的比例。</h1>
+            <p class="hero-description">
+              上传卡牌图片，把八条参考线对准卡片外沿和图案内沿，即时得到左右、上下居中比例。
+            </p>
+            <div class="feature-list" aria-label="产品特点">
+              <span>8 条手动参考线</span>
+              <span>手机与 PC 通用</span>
+              <span>图片不离开本机</span>
+            </div>
+          </div>
+
+          <div class="upload-panel" id="drop-zone">
+            <input
+              id="file-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+              hidden
+            />
+            <input
+              id="camera-input"
+              type="file"
+              accept="image/*"
+              capture="environment"
+              hidden
+            />
+
+            <div class="upload-illustration" aria-hidden="true">
+              <div class="sample-card">
+                <span class="sample-line sample-line-left"></span>
+                <span class="sample-line sample-line-right"></span>
+                <span class="sample-line sample-line-top"></span>
+                <span class="sample-line sample-line-bottom"></span>
+                <div class="sample-ball"></div>
+                <div class="sample-copy"></div>
+                <div class="sample-copy short"></div>
+              </div>
+            </div>
+
+            <div class="upload-panel-copy">
+              <p class="upload-kicker">开始测量</p>
+              <h2>选择一张卡牌图片</h2>
+              <p>正上方拍摄、卡片完整入镜、背景干净时最容易对齐。</p>
+            </div>
+
+            <div class="upload-actions">
+              <button class="button button-primary" id="choose-image-button" type="button">
+                <span class="button-icon" aria-hidden="true">↑</span>
+                选择图片
+              </button>
+              <button class="button button-secondary camera-button" id="take-photo-button" type="button">
+                <span class="button-icon camera-icon" aria-hidden="true"></span>
+                拍照
+              </button>
+            </div>
+
+            <p class="drop-hint">也可以把 JPG、PNG 或 WebP 拖到这里 · 最大 25MB</p>
+            <div class="error-message" id="upload-error" role="alert" hidden>
+              <strong id="upload-error-title"></strong>
+              <span id="upload-error-detail"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="processing-view view" id="processing-view" aria-live="polite" hidden>
+          <div class="processing-card">
+            <div class="processing-graphic" aria-hidden="true">
+              <div class="scan-card"></div>
+              <span class="scan-line"></span>
+            </div>
+            <p class="eyebrow">LOCAL IMAGE PROCESSING</p>
+            <h1>正在准备图片</h1>
+            <p id="processing-message">图片只在当前浏览器中解码，不会上传。</p>
+            <button class="text-button" id="processing-change-button" type="button" hidden>换一张图</button>
+          </div>
+        </section>
+
+        <section class="editor-view view" id="editor-view" aria-labelledby="editor-title" hidden>
+          <div class="editor-heading">
+            <div>
+              <p class="eyebrow">MANUAL MEASUREMENT</p>
+              <h1 id="editor-title">调整参考线</h1>
+              <p>实线对准卡片外沿，虚线对准图案内沿。拖动时结果会即时更新。</p>
+            </div>
+            <div class="editor-actions">
+              <button class="button button-secondary compact" id="reset-guides-button" type="button">
+                重置参考线
+              </button>
+              <button class="button button-dark compact" id="change-image-button" type="button">更换图片</button>
+            </div>
+          </div>
+
+          <div class="measurement-workspace">
+            <aside class="results-panel" aria-label="居中测量结果">
+              <div class="results-header">
+                <span>实时结果</span>
+                <span class="live-dot"><i></i> LIVE</span>
+              </div>
+
+              <div class="axis-result" id="horizontal-result">
+                <div class="axis-title">
+                  <span>左右居中</span>
+                  <span class="axis-direction">左 / 右</span>
+                </div>
+                <output id="horizontal-output" aria-label="左右居中比例">50 / 50</output>
+                <div class="ratio-bar" aria-hidden="true">
+                  <span class="ratio-first" id="horizontal-bar-first"></span>
+                  <span class="ratio-second"></span>
+                </div>
+              </div>
+
+              <div class="axis-result" id="vertical-result">
+                <div class="axis-title">
+                  <span>上下居中</span>
+                  <span class="axis-direction">上 / 下</span>
+                </div>
+                <output id="vertical-output" aria-label="上下居中比例">50 / 50</output>
+                <div class="ratio-bar vertical-ratio" aria-hidden="true">
+                  <span class="ratio-first" id="vertical-bar-first"></span>
+                  <span class="ratio-second"></span>
+                </div>
+              </div>
+
+              <div class="measurement-status" id="measurement-status">
+                <span class="status-check" aria-hidden="true">✓</span>
+                <span id="measurement-status-text">参考线已形成有效边框</span>
+              </div>
+
+              <div class="legend" aria-label="参考线图例">
+                <p>参考线</p>
+                <ul>
+                  <li><i class="legend-line solid"></i>实线：卡片外沿</li>
+                  <li><i class="legend-line dashed"></i>虚线：图案内沿</li>
+                </ul>
+              </div>
+
+              <p class="result-disclaimer">仅表示图片中的边框比例，不代表评级结果。</p>
+            </aside>
+
+            <div class="image-column">
+              <div class="image-stage" id="image-stage">
+                <div class="measurement-frame" id="measurement-frame">
+                  <img class="source-image" id="source-image" alt="待测量的卡牌图片" draggable="false" />
+                  <div class="guide-layer" id="guide-layer"></div>
+                </div>
+              </div>
+              <p class="image-caption">
+                <span class="caption-icon" aria-hidden="true">↕</span>
+                手机上请按住圆形手柄拖动；在图片外仍可正常滚动页面。
+              </p>
+            </div>
+          </div>
+
+          <div class="sr-only" id="result-announcer" aria-live="polite"></div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <span>Card Centering Tool · v0.1</span>
+        <span>图片本地处理，不保存，不上传</span>
+      </footer>
+    </div>
+
+    <noscript>此工具需要启用 JavaScript 才能在浏览器本地处理图片。</noscript>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
