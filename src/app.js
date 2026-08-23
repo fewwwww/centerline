@@ -64,6 +64,7 @@ function showView(view) {
   [elements.uploadView, elements.processingView, elements.editorView].forEach((candidate) => {
     candidate.hidden = candidate !== view;
   });
+  document.body.dataset.view = view.id;
 }
 
 function clearProcessingTimers() {

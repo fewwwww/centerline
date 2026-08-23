@@ -11,7 +11,7 @@
     <title>卡牌居中测量器</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body data-view="upload-view">
     <div class="app-shell">
       <header class="site-header">
         <a class="brand" href="./" aria-label="卡牌居中测量器首页">
@@ -111,7 +111,7 @@
             <div>
               <p class="eyebrow">MANUAL MEASUREMENT</p>
               <h1 id="editor-title">调整参考线</h1>
-              <p>实线对准卡片外沿，虚线对准图案内沿。拖动时结果会即时更新。</p>
+              <p>把八条虚线分别对准卡片外沿和图案内沿。拖动时结果会即时更新。</p>
             </div>
             <div class="editor-actions">
               <button class="button button-secondary compact" id="reset-guides-button" type="button">
@@ -160,8 +160,8 @@
               <div class="legend" aria-label="参考线图例">
                 <p>参考线</p>
                 <ul>
-                  <li><i class="legend-line solid"></i>实线：卡片外沿</li>
-                  <li><i class="legend-line dashed"></i>虚线：图案内沿</li>
+                  <li><i class="legend-line dashed"></i>所有参考线均为虚线</li>
+                  <li><i class="legend-handle" aria-hidden="true">外 / 内</i>手柄文字区分边界</li>
                 </ul>
               </div>
 
@@ -177,7 +177,7 @@
               </div>
               <p class="image-caption">
                 <span class="caption-icon" aria-hidden="true">↕</span>
-                手机上请按住圆形手柄拖动；在图片外仍可正常滚动页面。
+                手机上请按住圆形手柄拖动；页面会保持固定，不随手柄移动。
               </p>
             </div>
           </div>
