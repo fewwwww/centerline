@@ -52,16 +52,24 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
     readFile(new URL("assets/og-card-centering.png", projectUrl)),
   ]);
 
-  assert.match(html, /<title>无广告卡牌居中测量器｜Edge Grading 替代 - CENTERLINE<\/title>/);
-  assert.match(html, /name="description"[\s\S]*Edge Grading Centering Tool 的简洁替代/);
+  assert.match(html, /<title>卡牌居中测量器 - CENTERLINE<\/title>/);
+  assert.match(
+    html,
+    /name="description"[\s\S]*CENTERLINE 是免费的卡牌居中测量器。上传球星卡或收藏卡图片/,
+  );
   assert.match(html, /name="robots"[\s\S]*max-image-preview:large/);
   assert.match(html, /name="author" content="msfew"/);
-  assert.match(html, /property="og:title"/);
+  assert.match(html, /property="og:title" content="CENTERLINE｜卡牌居中测量器"/);
+  assert.match(
+    html,
+    /property="og:description"[\s\S]*上传卡牌图片，拖动八条参考线，即时计算左右与上下居中比例/,
+  );
   assert.match(html, /property="og:site_name" content="CENTERLINE"/);
   assert.match(html, /property="og:locale" content="zh_CN"/);
   assert.match(html, /property="og:image:width" content="1731"/);
   assert.match(html, /property="og:image:height" content="909"/);
   assert.match(html, /name="twitter:card"/);
+  assert.match(html, /name="twitter:title" content="CENTERLINE｜卡牌居中测量器"/);
   assert.match(html, /name="twitter:image:alt"/);
   assert.match(html, /<!-- build:site-metadata -->/);
   assert.match(html, /rel="author" href="https:\/\/sny\.is"/);
@@ -70,8 +78,7 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /卡牌居中比例/);
   assert.match(html, /卡牌居中 · 手动测量/);
   assert.match(html, /左右 \/ 上下比例/);
-  const body = html.match(/<body[\s\S]*<\/body>/)?.[0] || "";
-  assert.doesNotMatch(body, /Edge Grading|EDGE GRADING|NO ADS|无广告/);
+  assert.doesNotMatch(html, /无广告|简洁替代|比较定位/);
   assert.doesNotMatch(html, /name="keywords"/);
   assert.doesNotMatch(html, /(?:href|src)="\/(?!\/)/);
   assert.equal(socialImage.readUInt32BE(16), 1731);
@@ -84,6 +91,10 @@ test("web app manifest keeps icons inside the GitHub Pages subpath", async () =>
   assert.equal(manifest.name, "CENTERLINE 卡牌居中测量器");
   assert.equal(manifest.short_name, "CENTERLINE");
   assert.equal(manifest.lang, "zh-CN");
+  assert.equal(
+    manifest.description,
+    "用八条参考线即时测量卡牌左右与上下居中比例，图片只在浏览器本地处理。",
+  );
   assert.equal(manifest.start_url, "./");
   assert.equal(manifest.scope, "./");
   assert.deepEqual(
@@ -147,7 +158,12 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       `${siteUrl}assets/og-card-centering.png`,
     );
     assert.equal(webPage.isPartOf["@id"], `${siteUrl}#website`);
-    assert.ok(webPage.keywords.includes("Edge Grading 无广告替代"));
+    assert.deepEqual(webPage.keywords, [
+      "卡牌居中测量",
+      "球星卡居中",
+      "收藏卡居中比例",
+      "卡牌边框测量",
+    ]);
     assert.equal(author.name, "msfew");
     assert.equal(author.url, "https://sny.is/");
     assert.ok(!html.includes("aggregateRating"));

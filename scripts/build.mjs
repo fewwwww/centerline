@@ -6,7 +6,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputDirectory = join(projectRoot, "dist");
 const metadataMarker = "    <!-- build:site-metadata -->";
 const siteDescription =
-  "CENTERLINE 是免费的无广告卡牌居中测量器，也是 Edge Grading Centering Tool 的简洁替代。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。";
+  "CENTERLINE 是免费的卡牌居中测量器。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。";
 const authorUrl = "https://sny.is/";
 const publicFiles = [
   "styles.css",
@@ -90,7 +90,7 @@ function createStructuredData(siteUrl, imageUrl) {
           "卡牌居中测量",
           "球星卡居中",
           "收藏卡居中比例",
-          "Edge Grading 无广告替代",
+          "卡牌边框测量",
         ],
       },
       {

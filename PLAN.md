@@ -15,9 +15,7 @@
 
 MVP 只解决手动测量，结果在浏览器本地生成，不把图片上传到服务器。
 
-## 2. 参考站实测结论
-
-参考：[Edge Grading Centering Tool](https://edgegrading.com/centering/)
+## 2. 同类工具实测结论
 
 本轮在桌面浏览器与 390 × 844 手机视口中完成了页面检查，并上传了用户提供的 Cooper Flagg 卡图。
 
@@ -167,7 +165,7 @@ bottomPct = 100 - topPct
 ### 阶段 E：可发现性与发布
 
 - 页面 title、description、可见 H1、Open Graph 与 Twitter 文案使用一致的“卡牌居中测量器”任务口径。
-- 比较定位统一为“Edge Grading-style · No ads / Edge Grading 的无广告替代”，只用于 SEO 元数据，不进入页面可见的主宣传语，也不使用冒充官方或授权关系的表述。
+- 公开 title、description、Open Graph、Twitter 和页面正文只描述 CENTERLINE 自身功能，不出现其他产品品牌或比较定位。
 - 正式构建使用公开 `SITE_URL` 生成 canonical、分享图绝对 URL、WebSite + WebPage + Person JSON-LD、sitemap 与 robots。
 - sitemap 只列 canonical 首页；不使用 `meta keywords`，不虚构评分、评论或站点验证码。
 - GitHub Pages 项目子路径无法控制主机根 robots 的边界写入部署文档，部署后通过 Search Console 单独提交 sitemap。
