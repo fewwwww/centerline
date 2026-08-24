@@ -23,6 +23,7 @@ const publicFiles = [
   "src/app.js",
   "src/image.js",
   "src/measurement.js",
+  "src/viewport.js",
 ];
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL);
 

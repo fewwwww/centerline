@@ -150,7 +150,7 @@
             <div>
               <p class="eyebrow">MANUAL MEASUREMENT</p>
               <h1 id="editor-title">调整参考线</h1>
-              <p>把八条虚线分别对准卡片外沿和图案内沿。拖动时结果会即时更新。</p>
+              <p>缩放并拖动图片查看边角，再把八条虚线分别对准卡片外沿和图案内沿。</p>
             </div>
             <div class="editor-actions">
               <button class="button button-secondary compact" id="reset-guides-button" type="button">
@@ -209,14 +209,27 @@
 
             <div class="image-column">
               <div class="image-stage" id="image-stage">
-                <div class="measurement-frame" id="measurement-frame">
+                <div class="zoom-controls" role="group" aria-label="图片缩放">
+                  <button class="zoom-button" id="zoom-out-button" type="button" aria-label="缩小图片" title="缩小图片">−</button>
+                  <button class="zoom-value" id="zoom-reset-button" type="button" aria-label="恢复为 100%" title="恢复为 100%">
+                    <span id="zoom-value">100%</span>
+                  </button>
+                  <button class="zoom-button" id="zoom-in-button" type="button" aria-label="放大图片" title="放大图片">＋</button>
+                </div>
+                <div
+                  class="measurement-frame"
+                  id="measurement-frame"
+                  tabindex="0"
+                  aria-label="图片查看区域。可拖动图片，使用滚轮、双指或缩放按钮放大缩小。"
+                  aria-describedby="image-caption"
+                >
                   <img class="source-image" id="source-image" alt="待测量的卡牌图片" draggable="false" />
                   <div class="guide-layer" id="guide-layer"></div>
                 </div>
               </div>
-              <p class="image-caption">
-                <span class="caption-icon" aria-hidden="true">↕</span>
-                手机上请按住圆形手柄拖动；页面会保持固定，不随手柄移动。
+              <p class="image-caption" id="image-caption">
+                <span class="caption-icon" aria-hidden="true">↔</span>
+                滚轮或双指缩放，拖动图片定位；圆形手柄只调整参考线。
               </p>
             </div>
           </div>

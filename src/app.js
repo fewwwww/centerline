@@ -13,6 +13,16 @@ import {
   isSupportedImageFile,
   isTiffFile,
 } from "./image.js";
+import {
+  MAX_VIEW_ZOOM,
+  MIN_VIEW_ZOOM,
+  VIEW_ZOOM_STEP,
+  clampViewState,
+  guideScreenWidth,
+  panView,
+  pinchView,
+  zoomViewAt,
+} from "./viewport.js";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_WORKING_EDGE = 4096;
@@ -47,6 +57,10 @@ const elements = {
   measurementFrame: document.querySelector("#measurement-frame"),
   guideLayer: document.querySelector("#guide-layer"),
   sourceImage: document.querySelector("#source-image"),
+  zoomOutButton: document.querySelector("#zoom-out-button"),
+  zoomResetButton: document.querySelector("#zoom-reset-button"),
+  zoomInButton: document.querySelector("#zoom-in-button"),
+  zoomValue: document.querySelector("#zoom-value"),
   horizontalOutput: document.querySelector("#horizontal-output"),
   verticalOutput: document.querySelector("#vertical-output"),
   horizontalResult: document.querySelector("#horizontal-result"),
@@ -65,6 +79,10 @@ let currentImageUrl = null;
 let processingTimers = [];
 let announceTimer = null;
 let imageLoadSequence = 0;
+let viewState = { zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 };
+const imagePointers = new Map();
+let panGesture = null;
+let pinchGesture = null;
 
 function showView(view) {
   [elements.uploadView, elements.processingView, elements.editorView].forEach((candidate) => {
@@ -293,6 +311,7 @@ function replaceCurrentImageUrl(blob) {
 async function displayWorkingImage(blob) {
   elements.sourceImage.src = replaceCurrentImageUrl(blob);
   await elements.sourceImage.decode();
+  resetView();
 }
 
 async function handleFile(file) {
@@ -397,11 +416,12 @@ function beginGuideDrag(event) {
   button.classList.add("is-dragging");
   document.body.classList.add("is-dragging-guide");
   updateGuideFromPointer(event, key);
+  event.stopPropagation();
   event.preventDefault();
 }
 
 function updateGuideFromPointer(event, key) {
-  const rect = elements.measurementFrame.getBoundingClientRect();
+  const rect = elements.guideLayer.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
   const value = GUIDE_AXIS[key] === "x"
@@ -432,7 +452,7 @@ function handleGuideKeydown(event) {
   const button = event.currentTarget;
   const key = button.dataset.guide;
   const axis = GUIDE_AXIS[key];
-  const rect = elements.measurementFrame.getBoundingClientRect();
+  const rect = elements.guideLayer.getBoundingClientRect();
   const stepPixels = event.shiftKey ? 5 : 1;
   let direction = 0;
 
@@ -496,6 +516,207 @@ function resetGuides() {
   announceResults();
 }
 
+function viewSize() {
+  return {
+    width: elements.measurementFrame.clientWidth,
+    height: elements.measurementFrame.clientHeight,
+  };
+}
+
+function renderView() {
+  const inverseZoom = 1 / viewState.zoom;
+  const localGuideWidth = guideScreenWidth(viewState.zoom) * inverseZoom;
+
+  elements.measurementFrame.style.setProperty("--canvas-zoom", viewState.zoom.toFixed(4));
+  elements.measurementFrame.style.setProperty("--canvas-pan-x", `${viewState.panX.toFixed(2)}px`);
+  elements.measurementFrame.style.setProperty("--canvas-pan-y", `${viewState.panY.toFixed(2)}px`);
+  elements.measurementFrame.style.setProperty("--guide-inverse-zoom", inverseZoom.toFixed(4));
+  elements.measurementFrame.style.setProperty("--guide-active-scale", (inverseZoom * 1.12).toFixed(4));
+  elements.measurementFrame.style.setProperty("--guide-line-width", `${localGuideWidth.toFixed(3)}px`);
+  elements.measurementFrame.style.setProperty("--guide-shadow-size", `${(3 * inverseZoom).toFixed(3)}px`);
+  elements.measurementFrame.classList.toggle("is-zoomed", viewState.zoom > MIN_VIEW_ZOOM);
+
+  const percentage = `${Math.round(viewState.zoom * 100)}%`;
+  elements.zoomValue.textContent = percentage;
+  elements.zoomResetButton.setAttribute("aria-label", `恢复为 100%，当前 ${percentage}`);
+  elements.zoomOutButton.disabled = viewState.zoom <= MIN_VIEW_ZOOM;
+  elements.zoomInButton.disabled = viewState.zoom >= MAX_VIEW_ZOOM;
+}
+
+function setView(nextState) {
+  const { width, height } = viewSize();
+  viewState = clampViewState(nextState, width, height);
+  renderView();
+}
+
+function resetView() {
+  imagePointers.clear();
+  panGesture = null;
+  pinchGesture = null;
+  elements.measurementFrame.classList.remove("is-panning");
+  setView({ zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 });
+}
+
+function zoomAtPoint(requestedZoom, clientX, clientY) {
+  const rect = elements.measurementFrame.getBoundingClientRect();
+  const { width, height } = viewSize();
+  const focalX = clientX - (rect.left + rect.width / 2);
+  const focalY = clientY - (rect.top + rect.height / 2);
+  viewState = zoomViewAt(viewState, requestedZoom, focalX, focalY, width, height);
+  renderView();
+}
+
+function zoomAtCenter(requestedZoom) {
+  const { width, height } = viewSize();
+  viewState = zoomViewAt(viewState, requestedZoom, 0, 0, width, height);
+  renderView();
+}
+
+function pointerPairMetrics() {
+  const [first, second] = [...imagePointers.values()];
+  if (!first || !second) return null;
+
+  const rect = elements.measurementFrame.getBoundingClientRect();
+  const deltaX = second.x - first.x;
+  const deltaY = second.y - first.y;
+  return {
+    distance: Math.hypot(deltaX, deltaY),
+    center: {
+      x: ((first.x + second.x) / 2) - (rect.left + rect.width / 2),
+      y: ((first.y + second.y) / 2) - (rect.top + rect.height / 2),
+    },
+  };
+}
+
+function startPinchGesture() {
+  const metrics = pointerPairMetrics();
+  if (!metrics || !(metrics.distance > 0)) return;
+  pinchGesture = {
+    state: { ...viewState },
+    distance: metrics.distance,
+    center: metrics.center,
+  };
+  panGesture = null;
+  elements.measurementFrame.classList.add("is-panning");
+}
+
+function beginImageGesture(event) {
+  if (event.target.closest(".guide")) return;
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  if (event.pointerType === "mouse" && viewState.zoom <= MIN_VIEW_ZOOM) return;
+
+  imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  elements.measurementFrame.setPointerCapture(event.pointerId);
+
+  if (imagePointers.size === 1) {
+    panGesture = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      state: { ...viewState },
+    };
+    if (viewState.zoom > MIN_VIEW_ZOOM) {
+      elements.measurementFrame.classList.add("is-panning");
+    }
+  } else if (imagePointers.size === 2) {
+    startPinchGesture();
+  }
+
+  event.preventDefault();
+}
+
+function moveImageGesture(event) {
+  if (!imagePointers.has(event.pointerId)) return;
+  imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const { width, height } = viewSize();
+
+  if (imagePointers.size >= 2 && pinchGesture) {
+    const metrics = pointerPairMetrics();
+    if (metrics) {
+      viewState = pinchView(
+        pinchGesture.state,
+        pinchGesture.distance,
+        pinchGesture.center,
+        metrics.distance,
+        metrics.center,
+        width,
+        height,
+      );
+      renderView();
+    }
+  } else if (panGesture?.pointerId === event.pointerId) {
+    viewState = panView(
+      panGesture.state,
+      event.clientX - panGesture.x,
+      event.clientY - panGesture.y,
+      width,
+      height,
+    );
+    renderView();
+  }
+
+  event.preventDefault();
+}
+
+function endImageGesture(event) {
+  if (!imagePointers.has(event.pointerId)) return;
+  imagePointers.delete(event.pointerId);
+  if (elements.measurementFrame.hasPointerCapture(event.pointerId)) {
+    elements.measurementFrame.releasePointerCapture(event.pointerId);
+  }
+
+  if (imagePointers.size === 1) {
+    const [pointerId, point] = imagePointers.entries().next().value;
+    panGesture = { pointerId, x: point.x, y: point.y, state: { ...viewState } };
+    pinchGesture = null;
+  } else if (imagePointers.size === 0) {
+    panGesture = null;
+    pinchGesture = null;
+    elements.measurementFrame.classList.remove("is-panning");
+  } else {
+    startPinchGesture();
+  }
+}
+
+function handleImageWheel(event) {
+  const pageScale = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+    ? elements.measurementFrame.clientHeight
+    : event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+  const factor = Math.exp(-event.deltaY * pageScale * 0.002);
+  zoomAtPoint(viewState.zoom * factor, event.clientX, event.clientY);
+  event.preventDefault();
+}
+
+function handleImageDoubleClick(event) {
+  if (event.target.closest(".guide")) return;
+  const requestedZoom = viewState.zoom < 2 ? 2 : MIN_VIEW_ZOOM;
+  zoomAtPoint(requestedZoom, event.clientX, event.clientY);
+  event.preventDefault();
+}
+
+function handleImageKeydown(event) {
+  if (event.target !== elements.measurementFrame) return;
+
+  if (event.key === "+" || event.key === "=") {
+    zoomAtCenter(viewState.zoom + VIEW_ZOOM_STEP);
+  } else if (event.key === "-") {
+    zoomAtCenter(viewState.zoom - VIEW_ZOOM_STEP);
+  } else if (event.key === "0") {
+    resetView();
+  } else if (event.key.startsWith("Arrow") && viewState.zoom > MIN_VIEW_ZOOM) {
+    const distance = event.shiftKey ? 48 : 16;
+    const deltaX = event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0;
+    const deltaY = event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0;
+    const { width, height } = viewSize();
+    viewState = panView(viewState, deltaX, deltaY, width, height);
+    renderView();
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+}
+
 function requestImage() {
   elements.fileInput.click();
 }
@@ -517,6 +738,16 @@ elements.takePhotoButton.addEventListener("click", () => elements.cameraInput.cl
 elements.fileInput.addEventListener("change", handleFileInput);
 elements.cameraInput.addEventListener("change", handleFileInput);
 elements.resetGuidesButton.addEventListener("click", resetGuides);
+elements.zoomOutButton.addEventListener("click", () => zoomAtCenter(viewState.zoom - VIEW_ZOOM_STEP));
+elements.zoomResetButton.addEventListener("click", resetView);
+elements.zoomInButton.addEventListener("click", () => zoomAtCenter(viewState.zoom + VIEW_ZOOM_STEP));
+elements.measurementFrame.addEventListener("pointerdown", beginImageGesture);
+elements.measurementFrame.addEventListener("pointermove", moveImageGesture);
+elements.measurementFrame.addEventListener("pointerup", endImageGesture);
+elements.measurementFrame.addEventListener("pointercancel", endImageGesture);
+elements.measurementFrame.addEventListener("wheel", handleImageWheel, { passive: false });
+elements.measurementFrame.addEventListener("dblclick", handleImageDoubleClick);
+elements.measurementFrame.addEventListener("keydown", handleImageKeydown);
 
 elements.dropZone.addEventListener("dragenter", (event) => {
   event.preventDefault();
@@ -543,6 +774,11 @@ window.addEventListener("beforeunload", () => {
   if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
 });
 
+if ("ResizeObserver" in window) {
+  new ResizeObserver(() => setView(viewState)).observe(elements.measurementFrame);
+}
+
 mountGuides();
 renderGuides();
 updateResults();
+renderView();

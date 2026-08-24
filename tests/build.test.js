@@ -27,6 +27,7 @@ test("static build contains only deployable browser assets", async () => {
     "src/app.js",
     "src/image.js",
     "src/measurement.js",
+    "src/viewport.js",
   ];
 
   await Promise.all(expectedFiles.map((relativePath) => access(new URL(relativePath, distUrl))));
@@ -126,7 +127,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       readFile(new URL("sitemap.xml", distUrl), "utf8"),
     ]);
 
-    assert.ok(stdout.includes(`Built 18 static files into dist for ${siteUrl}`));
+    assert.ok(stdout.includes(`Built 19 static files into dist for ${siteUrl}`));
     assert.ok(html.includes(`<link rel="canonical" href="${siteUrl}"`));
     assert.ok(html.includes(`<meta property="og:url" content="${siteUrl}"`));
     assert.ok(html.includes(
@@ -217,8 +218,14 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(styles, /height:\s*100dvh/);
   assert.match(styles, /height:\s*-webkit-fill-available/);
   assert.match(styles, /env\(safe-area-inset-bottom\)/);
-  assert.match(styles, /border-left:\s*2px dashed var\(--guide-color\)/);
-  assert.match(styles, /border-top:\s*2px dashed var\(--guide-color\)/);
+  assert.match(styles, /border-left:\s*var\(--guide-line-width\) dashed var\(--guide-color\)/);
+  assert.match(styles, /border-top:\s*var\(--guide-line-width\) dashed var\(--guide-color\)/);
+  assert.match(styles, /scale\(var\(--canvas-zoom\)\)/);
+  assert.match(styles, /scale\(var\(--guide-inverse-zoom\)\)/);
+  assert.match(html, /id="zoom-out-button"/);
+  assert.match(html, /id="zoom-reset-button"/);
+  assert.match(html, /id="zoom-in-button"/);
+  assert.match(html, /滚轮或双指缩放，拖动图片定位/);
   assert.match(styles, /\.brand-credit a\s*\{[\s\S]*?text-decoration:\s*underline/);
   assert.doesNotMatch(html, /实线/);
 });

@@ -823,6 +823,7 @@ main {
 }
 
 .image-stage {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
@@ -839,12 +840,96 @@ main {
   background-size: 16px 16px;
 }
 
+.zoom-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: 38px minmax(58px, auto) 38px;
+  min-height: 38px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 11px;
+  background: rgba(17, 21, 16, 0.88);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+}
+
+.zoom-button,
+.zoom-value {
+  display: grid;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  color: #fff;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.zoom-button {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.zoom-value {
+  padding: 0 8px;
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.zoom-button:hover,
+.zoom-value:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.zoom-button:focus-visible,
+.zoom-value:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+
+.zoom-button:disabled {
+  color: rgba(255, 255, 255, 0.32);
+  cursor: default;
+}
+
 .measurement-frame {
+  --canvas-zoom: 1;
+  --canvas-pan-x: 0px;
+  --canvas-pan-y: 0px;
+  --guide-inverse-zoom: 1;
+  --guide-active-scale: 1.12;
+  --guide-line-width: 2px;
+  --guide-shadow-size: 3px;
   position: relative;
   display: inline-block;
   max-width: 100%;
+  overflow: hidden;
+  border-radius: 2px;
   line-height: 0;
+  touch-action: none;
   user-select: none;
+  cursor: zoom-in;
+}
+
+.measurement-frame.is-zoomed {
+  cursor: grab;
+}
+
+.measurement-frame.is-panning {
+  cursor: grabbing;
+}
+
+.measurement-frame:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.92), 0 0 0 6px var(--accent);
 }
 
 .source-image {
@@ -855,14 +940,20 @@ main {
   max-height: min(calc(100vh - 330px), 860px);
   max-height: min(calc(100dvh - 330px), 860px);
   object-fit: contain;
+  transform: translate3d(var(--canvas-pan-x), var(--canvas-pan-y), 0) scale(var(--canvas-zoom));
+  transform-origin: 50% 50%;
   -webkit-user-drag: none;
   user-select: none;
+  will-change: transform;
 }
 
 .guide-layer {
   position: absolute;
   inset: 0;
+  transform: translate3d(var(--canvas-pan-x), var(--canvas-pan-y), 0) scale(var(--canvas-zoom));
+  transform-origin: 50% 50%;
   pointer-events: none;
+  will-change: transform;
 }
 
 .guide {
@@ -893,35 +984,35 @@ main {
 .guide-vertical {
   top: 0;
   bottom: 0;
-  width: 44px;
+  width: calc(44px * var(--guide-inverse-zoom));
   transform: translateX(-50%);
 }
 
 .guide-horizontal {
   right: 0;
   left: 0;
-  height: 44px;
+  height: calc(44px * var(--guide-inverse-zoom));
   transform: translateY(-50%);
 }
 
 .guide-stroke {
   position: absolute;
   display: block;
-  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.7));
+  filter: drop-shadow(0 0 var(--guide-shadow-size) rgba(0, 0, 0, 0.7));
 }
 
 .guide-vertical .guide-stroke {
   top: 0;
   bottom: 0;
   left: 50%;
-  border-left: 2px dashed var(--guide-color);
+  border-left: var(--guide-line-width) dashed var(--guide-color);
 }
 
 .guide-horizontal .guide-stroke {
   top: 50%;
   right: 0;
   left: 0;
-  border-top: 2px dashed var(--guide-color);
+  border-top: var(--guide-line-width) dashed var(--guide-color);
 }
 
 .guide-handle {
@@ -947,19 +1038,19 @@ main {
 .guide-vertical .guide-handle {
   top: var(--handle-position);
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: scale(var(--guide-inverse-zoom)) translate(-50%, -50%);
 }
 
 .guide-horizontal .guide-handle {
   top: 50%;
   left: var(--handle-position);
-  transform: translate(-50%, -50%);
+  transform: scale(var(--guide-inverse-zoom)) translate(-50%, -50%);
 }
 
 .guide.is-dragging .guide-handle,
 .guide:focus-visible .guide-handle {
   box-shadow: 0 0 0 5px color-mix(in srgb, var(--guide-color) 32%, transparent), 0 6px 18px rgba(0, 0, 0, 0.5);
-  transform: translate(-50%, -50%) scale(1.12);
+  transform: scale(var(--guide-active-scale)) translate(-50%, -50%);
 }
 
 .is-dragging-guide {
