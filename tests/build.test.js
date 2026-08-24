@@ -39,7 +39,10 @@ test("static build contains only deployable browser assets", async () => {
   assert.match(html, /src="\.\/src\/app\.js"/);
   assert.match(html, /href="\.\/assets\/favicon\.svg"/);
   assert.match(html, /href="\.\/site\.webmanifest"/);
-  assert.match(html, /href="https:\/\/sny\.is" rel="author">by 姚溯宁<\/a>/);
+  assert.match(
+    html,
+    /<span class="brand-credit">by <a href="https:\/\/sny\.is" rel="author">msfew<\/a><\/span>/,
+  );
   assert.doesNotMatch(html, /build:site-metadata/);
 });
 
@@ -52,7 +55,7 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /<title>无广告卡牌居中测量器｜Edge Grading 替代 - CENTERLINE<\/title>/);
   assert.match(html, /name="description"[\s\S]*Edge Grading Centering Tool 的简洁替代/);
   assert.match(html, /name="robots"[\s\S]*max-image-preview:large/);
-  assert.match(html, /name="author" content="姚溯宁"/);
+  assert.match(html, /name="author" content="msfew"/);
   assert.match(html, /property="og:title"/);
   assert.match(html, /property="og:site_name" content="CENTERLINE"/);
   assert.match(html, /property="og:locale" content="zh_CN"/);
@@ -65,8 +68,10 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /href="\.\/styles\.css"/);
   assert.match(html, /src="\.\/src\/app\.js"/);
   assert.match(html, /卡牌居中比例/);
-  assert.match(html, /EDGE GRADING-STYLE · NO ADS/);
-  assert.match(html, /无广告 · 图片不上传/);
+  assert.match(html, /卡牌居中 · 手动测量/);
+  assert.match(html, /左右 \/ 上下比例/);
+  const body = html.match(/<body[\s\S]*<\/body>/)?.[0] || "";
+  assert.doesNotMatch(body, /Edge Grading|EDGE GRADING|NO ADS|无广告/);
   assert.doesNotMatch(html, /name="keywords"/);
   assert.doesNotMatch(html, /(?:href|src)="\/(?!\/)/);
   assert.equal(socialImage.readUInt32BE(16), 1731);
@@ -143,7 +148,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
     );
     assert.equal(webPage.isPartOf["@id"], `${siteUrl}#website`);
     assert.ok(webPage.keywords.includes("Edge Grading 无广告替代"));
-    assert.equal(author.name, "姚溯宁");
+    assert.equal(author.name, "msfew");
     assert.equal(author.url, "https://sny.is/");
     assert.ok(!html.includes("aggregateRating"));
     assert.ok(!html.includes('"review"'));
@@ -198,5 +203,6 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(styles, /env\(safe-area-inset-bottom\)/);
   assert.match(styles, /border-left:\s*2px dashed var\(--guide-color\)/);
   assert.match(styles, /border-top:\s*2px dashed var\(--guide-color\)/);
+  assert.match(styles, /\.brand-credit a\s*\{[\s\S]*?text-decoration:\s*underline/);
   assert.doesNotMatch(html, /实线/);
 });

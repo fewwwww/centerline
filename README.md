@@ -48,7 +48,7 @@ SITE_URL=https://example.com/ npm run build
 
 部署后仍需人工完成 Search Console 站点验证、提交 sitemap，并用 Rich Results Test / URL Inspection 检查线上响应；仓库不会预置或伪造站点验证码、评分和评论数据。Google 的 SoftwareApplication 富结果要求真实评分或评论，当前没有可信数据，因此刻意不声明该富结果类型。
 
-对外比较口径统一为“Edge Grading-style · No ads”或“Edge Grading 的无广告替代”，表达的是相似的手动参考线测量任务，不宣称 CENTERLINE 与 Edge Grading 存在隶属、授权或官方关系。
+SEO 比较词统一为“Edge Grading-style · No ads”或“Edge Grading 的无广告替代”，只用于搜索元数据，不作为页面可见的主宣传语；它表达的是相似的手动参考线测量任务，不宣称 CENTERLINE 与 Edge Grading 存在隶属、授权或官方关系。
 
 ## 当前范围
 

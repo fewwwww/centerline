@@ -127,12 +127,16 @@ main {
   font-size: 12px;
   font-weight: 650;
   letter-spacing: 0;
+}
+
+.brand-credit a {
+  color: inherit;
   text-decoration: underline;
   text-decoration-color: rgba(21, 23, 18, 0.3);
   text-underline-offset: 3px;
 }
 
-.brand-credit:hover {
+.brand-credit a:hover {
   color: var(--ink);
   text-decoration-color: currentColor;
 }

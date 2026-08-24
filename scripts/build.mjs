@@ -96,7 +96,7 @@ function createStructuredData(siteUrl, imageUrl) {
       {
         "@type": "Person",
         "@id": authorId,
-        name: "姚溯宁",
+        name: "msfew",
         url: authorUrl,
       },
     ],
