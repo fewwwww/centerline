@@ -107,6 +107,12 @@ main {
 
 .brand {
   display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.brand-home {
+  display: inline-flex;
   gap: 12px;
   align-items: center;
   color: var(--ink);
@@ -114,6 +120,21 @@ main {
   font-weight: 800;
   letter-spacing: 0.17em;
   text-decoration: none;
+}
+
+.brand-credit {
+  color: #5d6259;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(21, 23, 18, 0.3);
+  text-underline-offset: 3px;
+}
+
+.brand-credit:hover {
+  color: var(--ink);
+  text-decoration-color: currentColor;
 }
 
 .brand-mark {

@@ -3,23 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>无广告卡牌居中测量器｜Edge Grading 替代 - CENTERLINE</title>
     <meta
       name="description"
-      content="上传卡牌图片，手动调整八条参考线，实时测量左右与上下居中比例。图片仅在浏览器本地处理。"
+      content="CENTERLINE 是免费的无广告卡牌居中测量器，也是 Edge Grading Centering Tool 的简洁替代。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。"
+    />
+    <meta name="author" content="姚溯宁" />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
     />
     <meta name="theme-color" content="#f2f0e9" />
-    <title>卡牌居中测量器</title>
+    <meta name="application-name" content="CENTERLINE" />
+    <meta name="apple-mobile-web-app-title" content="CENTERLINE" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="CENTERLINE" />
+    <meta property="og:title" content="CENTERLINE｜Edge Grading 的无广告替代" />
+    <meta
+      property="og:description"
+      content="像 Edge Grading 一样用八条参考线测量卡牌居中，但没有广告、弹窗或账号；图片只在浏览器本地处理。"
+    />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1731" />
+    <meta property="og:image:height" content="909" />
+    <meta property="og:image:alt" content="CENTERLINE 卡牌居中测量器界面预览" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="CENTERLINE｜Edge Grading 的无广告替代" />
+    <meta
+      name="twitter:description"
+      content="像 Edge Grading 一样用八条参考线测量卡牌居中，但没有广告、弹窗或账号；图片只在浏览器本地处理。"
+    />
+    <meta name="twitter:image:alt" content="CENTERLINE 卡牌居中测量器界面预览" />
+    <!-- build:site-metadata -->
+    <link rel="icon" href="./assets/favicon.svg" sizes="any" type="image/svg+xml" />
+    <link rel="icon" href="./assets/favicon-32x32.png" sizes="32x32" type="image/png" />
+    <link rel="shortcut icon" href="./assets/favicon.ico" />
+    <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" sizes="180x180" />
+    <link rel="mask-icon" href="./assets/safari-pinned-tab.svg" color="#151712" />
+    <link rel="manifest" href="./site.webmanifest" />
+    <link rel="author" href="https://sny.is" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body data-view="upload-view">
     <div class="app-shell">
       <header class="site-header">
-        <a class="brand" href="./" aria-label="卡牌居中测量器首页">
-          <span class="brand-mark" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-          </span>
-          <span>CENTERLINE</span>
-        </a>
+        <div class="brand">
+          <a class="brand-home" href="./" aria-label="卡牌居中测量器首页">
+            <span class="brand-mark" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </span>
+            <span>CENTERLINE</span>
+          </a>
+          <a class="brand-credit" href="https://sny.is" rel="author">by 姚溯宁</a>
+        </div>
         <div class="privacy-chip" title="图片不会上传服务器">
           <span class="icon-lock" aria-hidden="true"></span>
           本地处理
@@ -29,15 +68,15 @@
       <main>
         <section class="upload-view view" id="upload-view" aria-labelledby="upload-title">
           <div class="hero-copy">
-            <p class="eyebrow">CARD CENTERING · MANUAL TOOL</p>
-            <h1 id="upload-title">看清每一毫米之前，<br />先看清两边的比例。</h1>
+            <p class="eyebrow">EDGE GRADING-STYLE · NO ADS</p>
+            <h1 id="upload-title">卡牌居中比例，<br />左右上下量清楚。</h1>
             <p class="hero-description">
-              上传卡牌图片，把八条参考线对准卡片外沿和图案内沿，即时得到左右、上下居中比例。
+              上传球星卡或收藏卡图片，把八条参考线对准卡片外沿和图案内沿，即时得到左右、上下居中比例。
             </p>
             <div class="feature-list" aria-label="产品特点">
               <span>8 条手动参考线</span>
               <span>手机与 PC 通用</span>
-              <span>图片不离开本机</span>
+              <span>无广告 · 图片不上传</span>
             </div>
           </div>
 
@@ -45,7 +84,7 @@
             <input
               id="file-input"
               type="file"
-              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+              accept="image/jpeg,image/png,image/apng,image/webp,image/avif,image/gif,image/bmp,image/tiff,image/heic,image/heif,.jpg,.jpeg,.jpe,.jfif,.png,.apng,.webp,.avif,.avifs,.gif,.bmp,.dib,.heic,.heif,.tif,.tiff"
               hidden
             />
             <input
@@ -85,7 +124,7 @@
               </button>
             </div>
 
-            <p class="drop-hint">也可以把 JPG、PNG 或 WebP 拖到这里 · 最大 25MB</p>
+            <p class="drop-hint">支持 JPG、PNG、WebP、HEIC、AVIF、GIF、BMP、TIFF · 最大 25MB</p>
             <div class="error-message" id="upload-error" role="alert" hidden>
               <strong id="upload-error-title"></strong>
               <span id="upload-error-detail"></span>

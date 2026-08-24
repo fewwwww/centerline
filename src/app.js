@@ -5,11 +5,17 @@ import {
   formatRatio,
   moveGuide,
 } from "./measurement.js";
+import {
+  convertHeicToJpeg,
+  decodeTiffToRgba,
+  isGifFile,
+  isHeicFile,
+  isSupportedImageFile,
+  isTiffFile,
+} from "./image.js";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_WORKING_EDGE = 4096;
-const SUPPORTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
-const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"]);
 
 const GUIDE_META = [
   { key: "outerLeft", label: "左外沿", short: "外", direction: "left", kind: "outer", axis: "vertical", handle: "42%" },
@@ -85,20 +91,11 @@ function showUploadError(title, detail) {
   showView(elements.uploadView);
 }
 
-function getExtension(fileName) {
-  const parts = fileName.toLowerCase().split(".");
-  return parts.length > 1 ? parts.at(-1) : "";
-}
-
 function validateFile(file) {
-  const extension = getExtension(file.name);
-  const typeSupported = file.type ? SUPPORTED_TYPES.has(file.type.toLowerCase()) : false;
-  const extensionSupported = SUPPORTED_EXTENSIONS.has(extension);
-
-  if (!typeSupported && !extensionSupported) {
+  if (!isSupportedImageFile(file)) {
     return {
       title: "暂不支持这个文件",
-      detail: "请选择 JPG、PNG 或 WebP 图片。",
+      detail: "请选择 JPG、PNG、WebP、HEIC、AVIF、GIF、BMP 或 TIFF 图片。",
     };
   }
 
@@ -110,12 +107,6 @@ function validateFile(file) {
   }
 
   return null;
-}
-
-function isHeic(file) {
-  const type = file.type.toLowerCase();
-  const extension = getExtension(file.name);
-  return type === "image/heic" || type === "image/heif" || extension === "heic" || extension === "heif";
 }
 
 function startProcessingState() {
@@ -196,6 +187,39 @@ function canvasToBlob(canvas, type, quality) {
 }
 
 async function prepareWorkingImage(file) {
+  if (isHeicFile(file)) {
+    const nativeSource = await tryDecodeSource(file);
+    if (nativeSource) {
+      return await decodedSourceToBlob(nativeSource, "image/jpeg", 0.92);
+    }
+    return normalizeWorkingImage(await convertHeicToJpeg(file));
+  }
+
+  if (isTiffFile(file)) {
+    const nativeSource = await tryDecodeSource(file);
+    if (nativeSource) {
+      return await decodedSourceToBlob(nativeSource, "image/png", 1);
+    }
+    return tiffToPngBlob(file);
+  }
+
+  if (isGifFile(file)) {
+    const source = await decodeSource(file);
+    return decodedSourceToBlob(source, "image/png", 1);
+  }
+
+  return normalizeWorkingImage(file);
+}
+
+async function tryDecodeSource(file) {
+  try {
+    return await decodeSource(file);
+  } catch {
+    return null;
+  }
+}
+
+async function normalizeWorkingImage(file) {
   const source = await decodeSource(file);
   const { width, height } = sourceDimensions(source);
 
@@ -210,11 +234,38 @@ async function prepareWorkingImage(file) {
     return file;
   }
 
+  return decodedSourceToBlob(source, file.type === "image/png" ? "image/png" : "image/jpeg", 0.92);
+}
+
+async function tiffToPngBlob(file) {
+  const { width, height, data } = await decodeTiffToRgba(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable");
+
+  context.putImageData(new ImageData(data, width, height), 0, 0);
+
+  if (Math.max(width, height) <= MAX_WORKING_EDGE) {
+    return canvasToBlob(canvas, "image/png", 1);
+  }
+  return decodedSourceToBlob(canvas, "image/png", 1);
+}
+
+async function decodedSourceToBlob(source, outputType, quality) {
+  const { width, height } = sourceDimensions(source);
+  if (!width || !height) {
+    releaseDecodedSource(source);
+    throw new Error("Image has no dimensions");
+  }
+
+  const longestEdge = Math.max(width, height);
   const scale = MAX_WORKING_EDGE / longestEdge;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * scale);
-  canvas.height = Math.round(height * scale);
-  const context = canvas.getContext("2d", { alpha: false });
+  canvas.width = Math.round(width * Math.min(1, scale));
+  canvas.height = Math.round(height * Math.min(1, scale));
+  const context = canvas.getContext("2d", { alpha: outputType === "image/png" });
 
   if (!context) {
     releaseDecodedSource(source);
@@ -223,11 +274,12 @@ async function prepareWorkingImage(file) {
 
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  releaseDecodedSource(source);
-
-  const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
-  return canvasToBlob(canvas, outputType, 0.92);
+  try {
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, outputType, quality);
+  } finally {
+    releaseDecodedSource(source);
+  }
 }
 
 function replaceCurrentImageUrl(blob) {
@@ -274,10 +326,12 @@ async function handleFile(file) {
     if (loadId !== imageLoadSequence) return;
 
     clearProcessingTimers();
-    if (isHeic(file)) {
-      showUploadError("当前浏览器无法读取 HEIC", "请使用拍照入口，或先把图片转换为 JPG 后重试。");
+    if (isHeicFile(file)) {
+      showUploadError("HEIC 图片无法读取", "请确认文件没有损坏；如果图片来自 iCloud，请先下载原图后重试。");
+    } else if (isTiffFile(file)) {
+      showUploadError("TIFF 图片无法读取", "请确认文件没有损坏，或把多页 TIFF 导出为单张 PNG 后重试。");
     } else {
-      showUploadError("图片无法读取", "请确认文件没有损坏，或改用 JPG、PNG、WebP 图片。");
+      showUploadError("图片无法读取", "当前浏览器无法解码该格式，或文件可能已经损坏。");
     }
   }
 }
@@ -396,8 +450,9 @@ function handleGuideKeydown(event) {
 }
 
 function renderAxis(result, output, container, bar) {
-  output.value = formatRatio(result);
-  output.textContent = formatRatio(result);
+  const ratio = formatRatio(result);
+  output.value = ratio;
+  output.textContent = ratio;
   container.classList.toggle("is-invalid", !result.valid);
   bar.style.width = result.valid ? `${result.first}%` : "0%";
 }

@@ -1,103 +1,182 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const outputFile = join(projectRoot, "dist/server/index.js");
-
-const textAssets = [
-  ["/", "index.html", "text/html; charset=utf-8"],
-  ["/index.html", "index.html", "text/html; charset=utf-8"],
-  ["/styles.css", "styles.css", "text/css; charset=utf-8"],
-  ["/src/app.js", "src/app.js", "text/javascript; charset=utf-8"],
-  ["/src/measurement.js", "src/measurement.js", "text/javascript; charset=utf-8"],
+const outputDirectory = join(projectRoot, "dist");
+const metadataMarker = "    <!-- build:site-metadata -->";
+const siteDescription =
+  "CENTERLINE 是免费的无广告卡牌居中测量器，也是 Edge Grading Centering Tool 的简洁替代。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。";
+const authorUrl = "https://sny.is/";
+const publicFiles = [
+  "styles.css",
+  "site.webmanifest",
+  "assets/app-icon.svg",
+  "assets/apple-touch-icon.png",
+  "assets/favicon-32x32.png",
+  "assets/favicon.ico",
+  "assets/favicon.svg",
+  "assets/icon-192.png",
+  "assets/icon-512.png",
+  "assets/og-card-centering.png",
+  "assets/safari-pinned-tab.svg",
+  "src/app.js",
+  "src/image.js",
+  "src/measurement.js",
 ];
+const siteUrl = normalizeSiteUrl(process.env.SITE_URL);
 
-const binaryAssets = [
-  ["/assets/og-card-centering.png", "assets/og-card-centering.png", "image/png"],
-];
+function normalizeSiteUrl(value) {
+  if (!value) return null;
 
-const textEntries = await Promise.all(
-  textAssets.map(async ([route, filePath, contentType]) => [
-    route,
-    { body: await readFile(join(projectRoot, filePath), "utf8"), contentType },
-  ]),
-);
-
-const binaryEntries = await Promise.all(
-  binaryAssets.map(async ([route, filePath, contentType]) => [
-    route,
-    { body: (await readFile(join(projectRoot, filePath))).toString("base64"), contentType },
-  ]),
-);
-
-const workerSource = `const TEXT_ASSETS = new Map(${JSON.stringify(textEntries)});
-const BINARY_ASSETS = new Map(${JSON.stringify(binaryEntries)});
-
-function addSocialMetadata(html, requestUrl) {
-  const origin = new URL(requestUrl).origin;
-  const tags = [
-    '<meta property="og:type" content="website" />',
-    '<meta property="og:title" content="卡牌居中测量器" />',
-    '<meta property="og:description" content="上传卡牌图片，拖动八条参考线，实时测量左右与上下居中比例。" />',
-    '<meta property="og:image" content="' + origin + '/assets/og-card-centering.png" />',
-    '<meta name="twitter:card" content="summary_large_image" />',
-    '<meta name="twitter:title" content="卡牌居中测量器" />',
-    '<meta name="twitter:description" content="拖动八条参考线，测量卡牌左右与上下居中比例。" />',
-    '<meta name="twitter:image" content="' + origin + '/assets/og-card-centering.png" />',
-  ].join('');
-  return html.replace('</head>', tags + '</head>');
-}
-
-function decodeBase64(value) {
-  const decoded = atob(value);
-  const bytes = new Uint8Array(decoded.length);
-  for (let index = 0; index < decoded.length; index += 1) {
-    bytes[index] = decoded.charCodeAt(index);
+  const url = new URL(value);
+  if (!new Set(["http:", "https:"]).has(url.protocol)) {
+    throw new Error("SITE_URL must use http or https");
   }
-  return bytes;
+
+  url.hash = "";
+  url.search = "";
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url;
 }
 
-function responseHeaders(contentType) {
+function escapeAttribute(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeJsonForHtml(value) {
+  return JSON.stringify(value, null, 2).replaceAll("<", "\\u003c");
+}
+
+function createStructuredData(siteUrl, imageUrl) {
+  const siteId = new URL("#website", siteUrl).href;
+  const pageId = new URL("#webpage", siteUrl).href;
+  const authorId = new URL("#person", authorUrl).href;
+
   return {
-    'Cache-Control': 'no-store',
-    'Content-Type': contentType,
-    'Permissions-Policy': 'camera=(self)',
-    'Referrer-Policy': 'no-referrer',
-    'X-Content-Type-Options': 'nosniff',
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": siteId,
+        url: siteUrl.href,
+        name: "CENTERLINE",
+        alternateName: "卡牌居中测量器",
+        description: siteDescription,
+        inLanguage: "zh-CN",
+        creator: { "@id": authorId },
+      },
+      {
+        "@type": "WebPage",
+        "@id": pageId,
+        url: siteUrl.href,
+        name: "CENTERLINE 卡牌居中测量器",
+        description: siteDescription,
+        inLanguage: "zh-CN",
+        isPartOf: { "@id": siteId },
+        primaryImageOfPage: {
+          "@type": "ImageObject",
+          url: imageUrl,
+          width: 1731,
+          height: 909,
+        },
+        author: { "@id": authorId },
+        genre: "在线工具",
+        keywords: [
+          "卡牌居中测量",
+          "球星卡居中",
+          "收藏卡居中比例",
+          "Edge Grading 无广告替代",
+        ],
+      },
+      {
+        "@type": "Person",
+        "@id": authorId,
+        name: "姚溯宁",
+        url: authorUrl,
+      },
+    ],
   };
 }
 
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const textAsset = TEXT_ASSETS.get(url.pathname);
-    if (textAsset) {
-      const body = textAsset.contentType.startsWith('text/html')
-        ? addSocialMetadata(textAsset.body, request.url)
-        : textAsset.body;
-      return new Response(request.method === 'HEAD' ? null : body, {
-        status: 200,
-        headers: responseHeaders(textAsset.contentType),
-      });
-    }
+function createSiteMetadata(siteUrl) {
+  if (!siteUrl) return "";
 
-    const binaryAsset = BINARY_ASSETS.get(url.pathname);
-    if (binaryAsset) {
-      return new Response(request.method === 'HEAD' ? null : decodeBase64(binaryAsset.body), {
-        status: 200,
-        headers: responseHeaders(binaryAsset.contentType),
-      });
-    }
+  const canonicalUrl = escapeAttribute(siteUrl.href);
+  const rawImageUrl = new URL("assets/og-card-centering.png", siteUrl).href;
+  const imageUrl = escapeAttribute(rawImageUrl);
+  const structuredData = escapeJsonForHtml(createStructuredData(siteUrl, rawImageUrl))
+    .split("\n")
+    .map((line) => `      ${line}`)
+    .join("\n");
+  const socialMetadata = [
+    `    <link rel="canonical" href="${canonicalUrl}" />`,
+    `    <meta property="og:url" content="${canonicalUrl}" />`,
+    `    <meta property="og:image" content="${imageUrl}" />`,
+    `    <meta name="twitter:image" content="${imageUrl}" />`,
+  ];
+  if (siteUrl.protocol === "https:") {
+    socialMetadata.splice(
+      3,
+      0,
+      `    <meta property="og:image:secure_url" content="${imageUrl}" />`,
+    );
+  }
 
-    return new Response(request.method === 'HEAD' ? null : 'Not found', {
-      status: 404,
-      headers: responseHeaders('text/plain; charset=utf-8'),
-    });
-  },
-};
-`;
+  return [
+    ...socialMetadata,
+    `    <script type="application/ld+json" id="seo-structured-data">`,
+    structuredData,
+    `    </script>`,
+  ].join("\n");
+}
 
-await mkdir(dirname(outputFile), { recursive: true });
-await writeFile(outputFile, workerSource);
-console.log(`Built ${textEntries.length + binaryEntries.length} local assets into dist/server/index.js`);
+function createSitemap(siteUrl) {
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
+    `  <url>`,
+    `    <loc>${escapeAttribute(siteUrl.href)}</loc>`,
+    `  </url>`,
+    `</urlset>`,
+    "",
+  ].join("\n");
+}
+
+function createRobots(siteUrl) {
+  return [
+    "User-agent: *",
+    "Allow: /",
+    `Sitemap: ${new URL("sitemap.xml", siteUrl).href}`,
+    "",
+  ].join("\n");
+}
+
+await rm(outputDirectory, { recursive: true, force: true });
+
+await Promise.all(publicFiles.map(async (relativePath) => {
+  const targetPath = join(outputDirectory, relativePath);
+  await mkdir(dirname(targetPath), { recursive: true });
+  await copyFile(join(projectRoot, relativePath), targetPath);
+}));
+
+const sourceHtml = await readFile(join(projectRoot, "index.html"), "utf8");
+if (!sourceHtml.includes(metadataMarker)) {
+  throw new Error(`index.html is missing ${metadataMarker}`);
+}
+
+const outputHtml = sourceHtml.replace(metadataMarker, createSiteMetadata(siteUrl));
+await writeFile(join(outputDirectory, "index.html"), outputHtml);
+await writeFile(join(outputDirectory, ".nojekyll"), "");
+
+if (siteUrl) {
+  await writeFile(join(outputDirectory, "sitemap.xml"), createSitemap(siteUrl));
+  await writeFile(join(outputDirectory, "robots.txt"), createRobots(siteUrl));
+}
+
+const generatedFileCount = siteUrl ? 4 : 2;
+console.log(`Built ${publicFiles.length + generatedFileCount} static files into dist${siteUrl ? ` for ${siteUrl.href}` : ""}`);

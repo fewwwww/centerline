@@ -1,17 +1,29 @@
 import { createReadStream, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, isAbsolute, join, normalize, relative } from "node:path";
+import { extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL(".", import.meta.url));
+const projectRoot = fileURLToPath(new URL(".", import.meta.url));
+const root = resolve(projectRoot, process.argv[2] || ".");
+const rootFromProject = relative(projectRoot, root);
 const port = Number.parseInt(process.env.PORT || "4173", 10);
+
+if (rootFromProject.startsWith("..") || isAbsolute(rootFromProject)) {
+  throw new Error("The local server root must stay inside the project");
+}
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".webp": "image/webp",
+  ".xml": "application/xml; charset=utf-8",
 };
 
 const server = createServer((request, response) => {
@@ -39,5 +51,5 @@ const server = createServer((request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Card centering tool: http://127.0.0.1:${port}`);
+  console.log(`Card centering tool (${rootFromProject || "."}): http://127.0.0.1:${port}`);
 });
