@@ -35,6 +35,15 @@ test("zero-width borders are invalid instead of showing fake percentages", () =>
 });
 
 test("default guides create valid 50 / 50 results on both axes", () => {
+  assert.deepEqual(
+    {
+      outerLeft: DEFAULT_GUIDES.outerLeft,
+      outerRight: DEFAULT_GUIDES.outerRight,
+      outerTop: DEFAULT_GUIDES.outerTop,
+      outerBottom: DEFAULT_GUIDES.outerBottom,
+    },
+    { outerLeft: 0, outerRight: 1, outerTop: 0, outerBottom: 1 },
+  );
   const results = calculateMeasurements(DEFAULT_GUIDES);
   assert.equal(formatRatio(results.horizontal), "50 / 50");
   assert.equal(formatRatio(results.vertical), "50 / 50");

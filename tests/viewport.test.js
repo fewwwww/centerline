@@ -6,13 +6,24 @@ import {
   CORRECTION_LOUPE_SIZE,
   clampViewState,
   computeContainSize,
+  computeMeasurementImageSize,
+  correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
   guideScreenWidth,
+  pointerButtonsAreReleased,
   panView,
   pinchView,
   positionCorrectionLoupe,
   zoomViewAt,
 } from "../src/viewport.js";
+
+test("pointer movement self-heals only after every button is released", () => {
+  assert.equal(pointerButtonsAreReleased({ buttons: 0 }), true);
+  assert.equal(pointerButtonsAreReleased({ buttons: 1 }), false);
+  assert.equal(pointerButtonsAreReleased({ buttons: 2 }), false);
+  assert.equal(pointerButtonsAreReleased({}), false);
+  assert.equal(pointerButtonsAreReleased(null), false);
+});
 
 test("viewport starts fitted and cannot pan until it is zoomed", () => {
   assert.deepEqual(
@@ -59,6 +70,16 @@ test("contain sizing gives a portrait image the full viewport height", () => {
   assert.deepEqual(computeContainSize(0, 600, 1000, 1500), { width: 0, height: 0 });
 });
 
+test("measurement sizing keeps outer guide handles inside the clipped viewport", () => {
+  const heightLimited = computeMeasurementImageSize(749, 330, 1693, 1000);
+  assert.ok(((749 - heightLimited.width) / 2) >= 18);
+  assert.ok(((330 - heightLimited.height) / 2) >= 18);
+
+  const widthLimited = computeMeasurementImageSize(390, 600, 1600, 900);
+  assert.ok(((390 - widthLimited.width) / 2) >= 18);
+  assert.ok(((600 - widthLimited.height) / 2) >= 18);
+});
+
 test("zoomed portrait content can move its edge into the central safe area", () => {
   const state = clampViewState(
     { zoom: 3, panX: 999, panY: 999 },
@@ -92,4 +113,49 @@ test("correction loupe samples a magnified square centered on the dragged point"
   assert.ok(Math.abs((rect.x + (rect.width / 2)) - 250) < 1e-9);
   assert.ok(Math.abs((rect.y + (rect.height / 2)) - 1125) < 1e-9);
   assert.equal(correctionLoupeSourceRect({ x: 0.5, y: 0.5 }, 1000, 1500, 0, 450), null);
+});
+
+test("correction loupe guides follow both dashed edges beside every dragged corner", () => {
+  const quad = [
+    { x: 20, y: 15 },
+    { x: 100, y: 28 },
+    { x: 88, y: 108 },
+    { x: 12, y: 92 },
+  ];
+
+  quad.forEach((corner, cornerIndex) => {
+    const segments = correctionLoupeGuideSegments(quad, cornerIndex);
+    const neighborIndices = [(cornerIndex + 3) % 4, (cornerIndex + 1) % 4];
+
+    assert.equal(segments.length, 2);
+    segments.forEach((segment, segmentIndex) => {
+      const segmentVector = {
+        x: segment.end.x - segment.start.x,
+        y: segment.end.y - segment.start.y,
+      };
+      const edgeVector = {
+        x: quad[neighborIndices[segmentIndex]].x - corner.x,
+        y: quad[neighborIndices[segmentIndex]].y - corner.y,
+      };
+      const crossProduct = (segmentVector.x * edgeVector.y) - (segmentVector.y * edgeVector.x);
+      assert.ok(Math.abs(crossProduct) < 1e-8, `corner ${cornerIndex} guide must stay parallel`);
+      assert.deepEqual(
+        {
+          x: (segment.start.x + segment.end.x) / 2,
+          y: (segment.start.y + segment.end.y) / 2,
+        },
+        { x: CORRECTION_LOUPE_SIZE / 2, y: CORRECTION_LOUPE_SIZE / 2 },
+      );
+    });
+  });
+});
+
+test("correction loupe guide geometry rejects invalid or collapsed edges", () => {
+  assert.deepEqual(correctionLoupeGuideSegments([], 0), []);
+  assert.equal(correctionLoupeGuideSegments([
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+  ], 0).length, 1);
 });

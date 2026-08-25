@@ -8,10 +8,14 @@ import {
 } from "./measurement.js";
 import {
   MAX_WORKING_EDGE,
+  beginImageCorrection,
   canvasToBlob,
+  commitWorkingImage,
+  createImageSession,
   isHeicFile,
   isTiffFile,
   prepareWorkingImage,
+  restoreOriginalCorrection,
   validateImageFile,
 } from "./image.js";
 import {
@@ -22,8 +26,11 @@ import {
   CORRECTION_LOUPE_SIZE,
   clampViewState,
   computeContainSize,
+  computeMeasurementImageSize,
+  correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
   guideScreenWidth,
+  pointerButtonsAreReleased,
   panView,
   pinchView,
   positionCorrectionLoupe,
@@ -49,6 +56,12 @@ const GUIDE_META = [
   { key: "innerTop", label: "上内沿", short: "内", direction: "top", kind: "inner", axis: "horizontal", handle: "58%" },
   { key: "innerBottom", label: "下内沿", short: "内", direction: "bottom", kind: "inner", axis: "horizontal", handle: "58%" },
   { key: "outerBottom", label: "下外沿", short: "外", direction: "bottom", kind: "outer", axis: "horizontal", handle: "42%" },
+];
+const ORIGINAL_RESTORE_QUAD = [
+  { x: 0.005, y: 0.005 },
+  { x: 0.995, y: 0.005 },
+  { x: 0.995, y: 0.995 },
+  { x: 0.005, y: 0.995 },
 ];
 
 const elements = {
@@ -99,6 +112,7 @@ const elements = {
   correctionLoupeLabel: document.querySelector("#correction-loupe-label"),
   correctionCompareButton: document.querySelector("#correction-compare-button"),
   correctionResetButton: document.querySelector("#correction-reset-button"),
+  correctionResetButtonBottom: document.querySelector("#correction-reset-button-bottom"),
   correctionCancelButton: document.querySelector("#correction-cancel-button"),
   correctionCancelButtonBottom: document.querySelector("#correction-cancel-button-bottom"),
   correctionApplyButton: document.querySelector("#correction-apply-button"),
@@ -120,7 +134,7 @@ let guides = { ...DEFAULT_GUIDES };
 let guideButtons = new Map();
 let activeDrag = null;
 let currentImageUrl = null;
-let currentWorkingBlob = null;
+let imageSession = null;
 let processingTimers = [];
 let announceTimer = null;
 let imageLoadSequence = 0;
@@ -151,6 +165,7 @@ function notifyUser(title, detail = "") {
     notice.setAttribute("aria-live", "polite");
     document.body.append(notice);
   }
+  notice.hidden = false;
   notice.replaceChildren();
   const strong = document.createElement("strong");
   strong.textContent = title;
@@ -163,6 +178,14 @@ function notifyUser(title, detail = "") {
   notice.classList.add("is-visible");
   window.clearTimeout(notice.hideTimer);
   notice.hideTimer = window.setTimeout(() => notice.classList.remove("is-visible"), 3600);
+}
+
+function dismissNotice() {
+  const notice = document.querySelector("#app-notice");
+  if (!notice) return;
+  window.clearTimeout(notice.hideTimer);
+  notice.classList.remove("is-visible");
+  notice.hidden = true;
 }
 
 function confirmImageReplacement(description) {
@@ -242,10 +265,16 @@ function replaceCurrentImageUrl(blob) {
   return currentImageUrl;
 }
 
-async function displayWorkingImage(blob) {
-  currentWorkingBlob = blob;
+async function displaySourceImage(blob) {
   elements.sourceImage.src = replaceCurrentImageUrl(blob);
   await elements.sourceImage.decode();
+}
+
+async function displayWorkingImage(blob, startsNewSession = false) {
+  await displaySourceImage(blob);
+  imageSession = startsNewSession
+    ? createImageSession(blob)
+    : commitWorkingImage(imageSession, blob);
 }
 
 async function handleFile(file, source = "file") {
@@ -254,7 +283,7 @@ async function handleFile(file, source = "file") {
   const validationError = validateImageFile(file);
   if (validationError) {
     clearProcessingTimers();
-    if (currentWorkingBlob && document.body.dataset.view !== "upload-view") {
+    if (imageSession?.workingBlob && document.body.dataset.view !== "upload-view") {
       notifyUser(validationError.title, validationError.detail);
     } else {
       showUploadError(validationError.title, validationError.detail);
@@ -262,13 +291,13 @@ async function handleFile(file, source = "file") {
     return;
   }
 
-  if (currentWorkingBlob && !["upload-view", "processing-view"].includes(document.body.dataset.view)) {
+  if (imageSession?.workingBlob && !["upload-view", "processing-view"].includes(document.body.dataset.view)) {
     const description = source === "paste" ? "粘贴的图片" : "新选择的图片";
     if (!await confirmImageReplacement(description)) return;
   }
 
   const loadId = ++imageLoadSequence;
-  const hadCurrentImage = Boolean(currentWorkingBlob);
+  const hadCurrentImage = Boolean(imageSession?.workingBlob);
   clearUploadError();
   startProcessingState();
 
@@ -276,7 +305,7 @@ async function handleFile(file, source = "file") {
     const workingImage = await prepareWorkingImage(file);
     if (loadId !== imageLoadSequence) return;
 
-    await displayWorkingImage(workingImage);
+    await displayWorkingImage(workingImage, true);
     if (loadId !== imageLoadSequence) return;
 
     clearProcessingTimers();
@@ -325,6 +354,7 @@ function createGuideButton(meta) {
   button.addEventListener("pointermove", moveActiveGuide);
   button.addEventListener("pointerup", endGuideDrag);
   button.addEventListener("pointercancel", endGuideDrag);
+  button.addEventListener("lostpointercapture", endGuideDrag);
   button.addEventListener("keydown", handleGuideKeydown);
   return button;
 }
@@ -385,20 +415,39 @@ function updateGuideFromPointer(event, key) {
 
 function moveActiveGuide(event) {
   if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+  if (pointerButtonsAreReleased(event)) {
+    endGuideDrag(event);
+    return;
+  }
   updateGuideFromPointer(event, activeDrag.key);
   event.preventDefault();
 }
 
-function endGuideDrag(event) {
-  if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
-
-  activeDrag.button.classList.remove("is-dragging");
-  if (activeDrag.button.hasPointerCapture(event.pointerId)) {
-    activeDrag.button.releasePointerCapture(event.pointerId);
+function releasePointerCapture(target, pointerId) {
+  if (!target || pointerId === undefined || !target.hasPointerCapture?.(pointerId)) return;
+  try {
+    target.releasePointerCapture(pointerId);
+  } catch {
+    // Capture can already be gone after an OS gesture, tab switch, or canceled touch.
   }
+}
+
+function finishGuideDrag(pointerId, { releaseCapture = true, announce = true } = {}) {
+  if (!activeDrag || (pointerId !== undefined && activeDrag.pointerId !== pointerId)) return false;
+
+  const drag = activeDrag;
   activeDrag = null;
+  drag.button.classList.remove("is-dragging");
   document.body.classList.remove("is-dragging-guide");
-  announceResults();
+  if (releaseCapture) releasePointerCapture(drag.button, drag.pointerId);
+  if (announce) announceResults();
+  return true;
+}
+
+function endGuideDrag(event) {
+  finishGuideDrag(event.pointerId, {
+    releaseCapture: event.type !== "lostpointercapture",
+  });
 }
 
 function handleGuideKeydown(event) {
@@ -499,7 +548,12 @@ function updateImageCanvasSize() {
   const viewportHeight = elements.measurementFrame.clientHeight;
   const imageWidth = elements.sourceImage.naturalWidth;
   const imageHeight = elements.sourceImage.naturalHeight;
-  const fitted = computeContainSize(viewportWidth, viewportHeight, imageWidth, imageHeight);
+  const fitted = computeMeasurementImageSize(
+    viewportWidth,
+    viewportHeight,
+    imageWidth,
+    imageHeight,
+  );
   if (!fitted.width || !fitted.height) return;
   elements.imageCanvas.style.width = `${fitted.width}px`;
   elements.imageCanvas.style.height = `${fitted.height}px`;
@@ -535,10 +589,7 @@ function setView(nextState) {
 }
 
 function resetView() {
-  imagePointers.clear();
-  panGesture = null;
-  pinchGesture = null;
-  elements.measurementFrame.classList.remove("is-panning");
+  cancelImageGestures();
   setView({ zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 });
 }
 
@@ -630,6 +681,10 @@ function beginImageGesture(event) {
 
 function moveImageGesture(event) {
   if (!imagePointers.has(event.pointerId)) return;
+  if (pointerButtonsAreReleased(event)) {
+    endImageGesture(event);
+    return;
+  }
   imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   const { width, height, contentWidth, contentHeight } = viewSize();
 
@@ -668,8 +723,8 @@ function moveImageGesture(event) {
 function endImageGesture(event) {
   if (!imagePointers.has(event.pointerId)) return;
   imagePointers.delete(event.pointerId);
-  if (elements.measurementFrame.hasPointerCapture(event.pointerId)) {
-    elements.measurementFrame.releasePointerCapture(event.pointerId);
+  if (event.type !== "lostpointercapture") {
+    releasePointerCapture(elements.measurementFrame, event.pointerId);
   }
 
   if (imagePointers.size === 1) {
@@ -682,6 +737,17 @@ function endImageGesture(event) {
     elements.measurementFrame.classList.remove("is-panning");
   } else {
     startPinchGesture();
+  }
+}
+
+function cancelImageGestures({ releaseCapture = true } = {}) {
+  const pointerIds = [...imagePointers.keys()];
+  imagePointers.clear();
+  panGesture = null;
+  pinchGesture = null;
+  elements.measurementFrame.classList.remove("is-panning");
+  if (releaseCapture) {
+    pointerIds.forEach((pointerId) => releasePointerCapture(elements.measurementFrame, pointerId));
   }
 }
 
@@ -815,6 +881,7 @@ function mountCorrectionHandles() {
     button.addEventListener("pointermove", moveCornerDrag);
     button.addEventListener("pointerup", endCornerDrag);
     button.addEventListener("pointercancel", endCornerDrag);
+    button.addEventListener("lostpointercapture", endCornerDrag);
     elements.correctionHandles.append(button);
     return button;
   });
@@ -908,6 +975,19 @@ function setCorrectionBusy(busy) {
   });
 }
 
+function setCorrectionSourceBusy(busy) {
+  [
+    elements.correctionResetButton,
+    elements.correctionResetButtonBottom,
+    elements.correctionCancelButton,
+    elements.correctionCancelButtonBottom,
+    elements.correctionApplyButton,
+    elements.correctionApplyButtonBottom,
+  ].forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
 function renderCorrectionUi() {
   correctionRenderFrame = null;
   renderCorrectionOverlay();
@@ -930,12 +1010,59 @@ function scheduleCorrectionUi() {
   correctionRenderFrame = window.requestAnimationFrame(renderCorrectionUi);
 }
 
-function resetCorrection() {
-  correctionRecipe = createCorrectionRecipe();
-  elements.straightenControl.value = "0";
-  elements.verticalPerspectiveControl.value = "0";
-  elements.horizontalPerspectiveControl.value = "0";
-  scheduleCorrectionUi();
+function resetCorrectionControls(recipe) {
+  correctionRecipe = recipe;
+  elements.straightenControl.value = String(recipe.straighten);
+  elements.verticalPerspectiveControl.value = String(recipe.verticalPerspective);
+  elements.horizontalPerspectiveControl.value = String(recipe.horizontalPerspective);
+}
+
+function createOriginalRestoreRecipe() {
+  return {
+    ...createCorrectionRecipe(),
+    quad: ORIGINAL_RESTORE_QUAD.map((point) => ({ ...point })),
+  };
+}
+
+function isOriginalRestoreRecipe(recipe) {
+  if (!recipe || recipe.aspect !== "free") return false;
+  if (Number(recipe.straighten) !== 0
+    || Number(recipe.verticalPerspective) !== 0
+    || Number(recipe.horizontalPerspective) !== 0) return false;
+  return ORIGINAL_RESTORE_QUAD.every((point, index) => (
+    recipe.quad?.[index]?.x === point.x && recipe.quad[index].y === point.y
+  ));
+}
+
+async function restoreOriginalImage() {
+  if (!imageSession?.originalBlob) return;
+  const previousSession = imageSession;
+  const previousRecipe = {
+    ...correctionRecipe,
+    quad: correctionRecipe.quad.map((point) => ({ ...point })),
+  };
+  hideCorrectionLoupe();
+  showOriginalCorrectionPreview();
+  setCorrectionSourceBusy(true);
+  try {
+    const restoredSession = restoreOriginalCorrection(imageSession);
+    resetCorrectionControls(createOriginalRestoreRecipe());
+    await displaySourceImage(restoredSession.correctionBlob);
+    imageSession = restoredSession;
+    drawCorrectionSource();
+    renderCorrectionUi();
+    elements.resultAnnouncer.textContent = "已还原到最初上传的图片。应用校正可保存还原，取消可保留当前工作图。";
+  } catch {
+    imageSession = previousSession;
+    resetCorrectionControls(previousRecipe);
+    await displaySourceImage(previousSession.correctionBlob).catch(() => {});
+    drawCorrectionSource();
+    renderCorrectionUi();
+    notifyUser("原图无法读取", "当前工作图没有变化，请重新上传图片后重试。");
+  } finally {
+    setCorrectionSourceBusy(false);
+    renderCorrectionUi();
+  }
 }
 
 function hideCorrectionLoupe() {
@@ -943,7 +1070,31 @@ function hideCorrectionLoupe() {
   correctionHandleButtons.forEach((button) => button.classList.remove("is-dragging"));
 }
 
-function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex) {
+function drawCorrectionLoupeGuides(context, recipe, cornerIndex) {
+  const adjustedPoints = correctionSampleQuad(
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+    recipe,
+  ).map(correctionPointToScreen);
+  const segments = correctionLoupeGuideSegments(adjustedPoints, cornerIndex);
+  if (!segments.length) return;
+
+  context.save();
+  context.beginPath();
+  segments.forEach(({ start, end }) => {
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+  });
+  context.lineWidth = 1.5;
+  context.lineCap = "round";
+  context.strokeStyle = "#fff";
+  context.shadowColor = "rgba(0, 0, 0, 0.9)";
+  context.shadowBlur = 2;
+  context.stroke();
+  context.restore();
+}
+
+function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex, recipe = correctionRecipe) {
   const sourceWidth = elements.sourceImage.naturalWidth;
   const sourceHeight = elements.sourceImage.naturalHeight;
   const sourceRect = correctionLoupeSourceRect(
@@ -987,6 +1138,7 @@ function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex) {
       (sourceBottom - sourceTop) * scale,
     );
   }
+  drawCorrectionLoupeGuides(context, recipe, cornerIndex);
 
   const position = positionCorrectionLoupe(
     pointerX,
@@ -1002,15 +1154,24 @@ function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex) {
 
 function beginCornerDrag(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
-  activeCornerDrag = { pointerId: event.pointerId, index: Number(event.currentTarget.dataset.corner) };
-  event.currentTarget.classList.add("is-dragging");
-  event.currentTarget.setPointerCapture(event.pointerId);
+  const button = event.currentTarget;
+  activeCornerDrag = {
+    pointerId: event.pointerId,
+    index: Number(button.dataset.corner),
+    button,
+  };
+  button.classList.add("is-dragging");
+  button.setPointerCapture(event.pointerId);
   moveCornerDrag(event);
   event.preventDefault();
 }
 
 function moveCornerDrag(event) {
   if (!activeCornerDrag || activeCornerDrag.pointerId !== event.pointerId) return;
+  if (pointerButtonsAreReleased(event)) {
+    endCornerDrag(event);
+    return;
+  }
   const frameRect = elements.correctionFrame.getBoundingClientRect();
   const pointerX = event.clientX - frameRect.left;
   const pointerY = event.clientY - frameRect.top;
@@ -1022,8 +1183,9 @@ function moveCornerDrag(event) {
     index === activeCornerDrag.index ? point : current
   ));
   if (isConvexQuad(nextQuad)) {
-    drawCorrectionLoupe(point, pointerX, pointerY, activeCornerDrag.index);
-    correctionRecipe = { ...correctionRecipe, quad: nextQuad };
+    const nextRecipe = { ...correctionRecipe, quad: nextQuad };
+    drawCorrectionLoupe(point, pointerX, pointerY, activeCornerDrag.index, nextRecipe);
+    correctionRecipe = nextRecipe;
     scheduleCorrectionUi();
   } else {
     drawCorrectionLoupe(
@@ -1036,23 +1198,47 @@ function moveCornerDrag(event) {
   event.preventDefault();
 }
 
-function endCornerDrag(event) {
-  if (!activeCornerDrag || activeCornerDrag.pointerId !== event.pointerId) return;
-  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-    event.currentTarget.releasePointerCapture(event.pointerId);
-  }
-  event.currentTarget.classList.remove("is-dragging");
+function finishCornerDrag(pointerId, { releaseCapture = true } = {}) {
+  if (!activeCornerDrag
+    || (pointerId !== undefined && activeCornerDrag.pointerId !== pointerId)) return false;
+
+  const drag = activeCornerDrag;
   activeCornerDrag = null;
+  drag.button.classList.remove("is-dragging");
+  if (releaseCapture) releasePointerCapture(drag.button, drag.pointerId);
   hideCorrectionLoupe();
+  return true;
+}
+
+function endCornerDrag(event) {
+  finishCornerDrag(event.pointerId, {
+    releaseCapture: event.type !== "lostpointercapture",
+  });
+}
+
+function endActivePointerInteractions(event) {
+  endGuideDrag(event);
+  endImageGesture(event);
+  endCornerDrag(event);
+}
+
+function cancelActivePointerInteractions() {
+  finishGuideDrag(undefined, { releaseCapture: false, announce: false });
+  cancelImageGestures({ releaseCapture: false });
+  finishCornerDrag(undefined, { releaseCapture: false });
+  showOriginalCorrectionPreview();
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) cancelActivePointerInteractions();
 }
 
 function openCorrection() {
-  if (!currentWorkingBlob) return;
+  if (!imageSession?.workingBlob) return;
+  dismissNotice();
   hideCorrectionLoupe();
-  correctionRecipe = createCorrectionRecipe();
-  elements.straightenControl.value = "0";
-  elements.verticalPerspectiveControl.value = "0";
-  elements.horizontalPerspectiveControl.value = "0";
+  imageSession = beginImageCorrection(imageSession);
+  resetCorrectionControls(createCorrectionRecipe());
   showView(elements.correctionView);
   window.requestAnimationFrame(() => {
     drawCorrectionSource();
@@ -1060,9 +1246,12 @@ function openCorrection() {
   });
 }
 
-function cancelCorrection() {
+async function cancelCorrection() {
+  if (!imageSession?.workingBlob) return;
   hideCorrectionLoupe();
   showOriginalCorrectionPreview();
+  imageSession = beginImageCorrection(imageSession);
+  await displaySourceImage(imageSession.workingBlob);
   showView(elements.editorView);
   window.requestAnimationFrame(updateImageCanvasSize);
 }
@@ -1117,22 +1306,28 @@ async function applyCorrection() {
   await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
   try {
-    const size = correctionOutputSize(
-      elements.sourceImage.naturalWidth,
-      elements.sourceImage.naturalHeight,
-      correctionRecipe,
-      MAX_WORKING_EDGE,
-    );
-    const canvas = elements.correctionResultCanvas;
-    const renderer = renderCorrectionToCanvas(elements.sourceImage, correctionRecipe, canvas, size);
-    if (renderer !== "webgl" && requiresProjectiveCorrection(
-      elements.sourceImage.naturalWidth,
-      elements.sourceImage.naturalHeight,
-      correctionRecipe,
-    )) {
-      throw new Error("当前浏览器不支持透视校正");
+    let correctedBlob;
+    if (imageSession?.correctionBlob === imageSession?.originalBlob
+      && isOriginalRestoreRecipe(correctionRecipe)) {
+      correctedBlob = imageSession.originalBlob;
+    } else {
+      const size = correctionOutputSize(
+        elements.sourceImage.naturalWidth,
+        elements.sourceImage.naturalHeight,
+        correctionRecipe,
+        MAX_WORKING_EDGE,
+      );
+      const canvas = elements.correctionResultCanvas;
+      const renderer = renderCorrectionToCanvas(elements.sourceImage, correctionRecipe, canvas, size);
+      if (renderer !== "webgl" && requiresProjectiveCorrection(
+        elements.sourceImage.naturalWidth,
+        elements.sourceImage.naturalHeight,
+        correctionRecipe,
+      )) {
+        throw new Error("当前浏览器不支持透视校正");
+      }
+      correctedBlob = await canvasToBlob(canvas, "image/jpeg", 0.94);
     }
-    const correctedBlob = await canvasToBlob(canvas, "image/jpeg", 0.94);
     await displayWorkingImage(correctedBlob);
     guides = { ...DEFAULT_GUIDES };
     renderGuides();
@@ -1141,7 +1336,7 @@ async function applyCorrection() {
     window.requestAnimationFrame(() => {
       updateImageCanvasSize();
       resetView();
-      notifyUser("图片校正已应用", "参考线已重置，请重新对齐卡片边框。");
+      notifyUser("图片校正已应用", "外沿参考线已贴合图片边缘，请继续对齐图案内沿。");
     });
   } catch (error) {
     notifyUser("无法应用图片校正", error?.message || "请还原透视滑杆后重试。");
@@ -1182,10 +1377,12 @@ elements.measurementFrame.addEventListener("pointerdown", beginImageGesture);
 elements.measurementFrame.addEventListener("pointermove", moveImageGesture);
 elements.measurementFrame.addEventListener("pointerup", endImageGesture);
 elements.measurementFrame.addEventListener("pointercancel", endImageGesture);
+elements.measurementFrame.addEventListener("lostpointercapture", endImageGesture);
 elements.measurementFrame.addEventListener("wheel", handleImageWheel, { passive: false });
 elements.measurementFrame.addEventListener("dblclick", handleImageDoubleClick);
 elements.measurementFrame.addEventListener("keydown", handleImageKeydown);
-elements.correctionResetButton.addEventListener("click", resetCorrection);
+elements.correctionResetButton.addEventListener("click", restoreOriginalImage);
+elements.correctionResetButtonBottom.addEventListener("click", restoreOriginalImage);
 elements.correctionCancelButton.addEventListener("click", cancelCorrection);
 elements.correctionCancelButtonBottom.addEventListener("click", cancelCorrection);
 elements.correctionApplyButton.addEventListener("click", applyCorrection);
@@ -1239,6 +1436,10 @@ window.addEventListener("beforeunload", () => {
   if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
 });
 window.addEventListener("paste", handlePaste);
+window.addEventListener("pointerup", endActivePointerInteractions, true);
+window.addEventListener("pointercancel", endActivePointerInteractions, true);
+window.addEventListener("blur", cancelActivePointerInteractions);
+document.addEventListener("visibilitychange", handleVisibilityChange);
 
 if ("ResizeObserver" in window) {
   const measurementResizeObserver = new ResizeObserver(updateImageCanvasSize);

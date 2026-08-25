@@ -8,14 +8,35 @@ import {
   PAKO_INFLATE_URL,
   TIFF_CONVERTER_INTEGRITY,
   TIFF_CONVERTER_URL,
+  beginImageCorrection,
+  commitWorkingImage,
   convertHeicToJpeg,
+  createImageSession,
   decodeTiffToRgba,
   isGifFile,
   isHeicFile,
   isSupportedImageFile,
   validateImageFile,
   isTiffFile,
+  restoreOriginalCorrection,
 } from "../src/image.js";
+
+test("image session keeps the original while correction drafts switch between working and original blobs", () => {
+  const originalBlob = { id: "original" };
+  const correctedBlob = { id: "corrected" };
+  let session = createImageSession(originalBlob);
+
+  session = commitWorkingImage(session, correctedBlob);
+  session = beginImageCorrection(session);
+  assert.equal(session.originalBlob, originalBlob);
+  assert.equal(session.workingBlob, correctedBlob);
+  assert.equal(session.correctionBlob, correctedBlob);
+
+  session = restoreOriginalCorrection(session);
+  assert.equal(session.originalBlob, originalBlob);
+  assert.equal(session.workingBlob, correctedBlob, "restore stays a draft until the user applies it");
+  assert.equal(session.correctionBlob, originalBlob);
+});
 
 test("HEIC detection accepts MIME types and filename extensions", () => {
   assert.equal(isHeicFile({ name: "card.jpg", type: "image/heic" }), true);

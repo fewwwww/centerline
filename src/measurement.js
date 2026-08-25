@@ -1,12 +1,12 @@
 export const DEFAULT_GUIDES = Object.freeze({
-  outerLeft: 0.04,
+  outerLeft: 0,
   innerLeft: 0.12,
   innerRight: 0.88,
-  outerRight: 0.96,
-  outerTop: 0.04,
+  outerRight: 1,
+  outerTop: 0,
   innerTop: 0.12,
   innerBottom: 0.88,
-  outerBottom: 0.96,
+  outerBottom: 1,
 });
 
 export const GUIDE_AXIS = Object.freeze({

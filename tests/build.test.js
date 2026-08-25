@@ -238,3 +238,41 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(perspective, /UNPACK_FLIP_Y_WEBGL, false/);
   assert.doesNotMatch(html, /实线/);
 });
+
+test("stacked editor keeps a usable image row at browser zoom widths", async () => {
+  const styles = await readFile(new URL("styles.css", projectUrl), "utf8");
+
+  assert.match(
+    styles,
+    /@media \(min-width: 641px\) and \(max-width: 980px\)[\s\S]*?\.measurement-workspace\s*\{[\s\S]*?grid-template-rows:\s*clamp\(96px, 18dvh, 112px\) minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(min-width: 641px\) and \(max-width: 980px\)[\s\S]*?\.results-panel\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /@media \(min-width: 641px\) and \(max-width: 980px\) and \(max-height: 720px\)[\s\S]*?\.editor-heading \.eyebrow,[\s\S]*?\.editor-heading > div:first-child > p:last-child\s*\{\s*display:\s*none/,
+  );
+});
+
+test("pointer interactions have page-wide and capture-loss release fallbacks", async () => {
+  const app = await readFile(new URL("src/app.js", projectUrl), "utf8");
+
+  assert.match(app, /button\.addEventListener\("lostpointercapture", endGuideDrag\)/);
+  assert.match(app, /button\.addEventListener\("lostpointercapture", endCornerDrag\)/);
+  assert.match(
+    app,
+    /elements\.measurementFrame\.addEventListener\("lostpointercapture", endImageGesture\)/,
+  );
+  assert.match(
+    app,
+    /window\.addEventListener\("pointerup", endActivePointerInteractions, true\)/,
+  );
+  assert.match(
+    app,
+    /window\.addEventListener\("pointercancel", endActivePointerInteractions, true\)/,
+  );
+  assert.match(app, /window\.addEventListener\("blur", cancelActivePointerInteractions\)/);
+  assert.match(app, /document\.addEventListener\("visibilitychange", handleVisibilityChange\)/);
+});

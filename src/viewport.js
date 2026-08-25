@@ -1,11 +1,16 @@
 export const MIN_VIEW_ZOOM = 1;
 export const MAX_VIEW_ZOOM = 6;
 export const VIEW_ZOOM_STEP = 0.25;
+export const GUIDE_EDGE_GUTTER = 18;
 export const CORRECTION_LOUPE_SIZE = 116;
 export const CORRECTION_LOUPE_MAGNIFICATION = 2.6;
 
 export function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+export function pointerButtonsAreReleased(event) {
+  return event?.buttons === 0;
 }
 
 export function computeContainSize(viewportWidth, viewportHeight, imageWidth, imageHeight) {
@@ -18,6 +23,22 @@ export function computeContainSize(viewportWidth, viewportHeight, imageWidth, im
     width: imageWidth * scale,
     height: imageHeight * scale,
   };
+}
+
+export function computeMeasurementImageSize(
+  viewportWidth,
+  viewportHeight,
+  imageWidth,
+  imageHeight,
+  gutter = GUIDE_EDGE_GUTTER,
+) {
+  const safeGutter = Math.max(0, Number(gutter) || 0);
+  return computeContainSize(
+    Math.max(0, viewportWidth - (safeGutter * 2)),
+    Math.max(0, viewportHeight - (safeGutter * 2)),
+    imageWidth,
+    imageHeight,
+  );
 }
 
 function maximumPan(contentSize, viewportSize, zoom) {
@@ -150,4 +171,40 @@ export function correctionLoupeSourceRect(
     width: sourceSpan,
     height: sourceSpan,
   };
+}
+
+export function correctionLoupeGuideSegments(
+  quad,
+  cornerIndex,
+  size = CORRECTION_LOUPE_SIZE,
+  length = 36,
+) {
+  if (!Array.isArray(quad) || quad.length !== 4 || !Number.isInteger(cornerIndex)) return [];
+  if (cornerIndex < 0 || cornerIndex >= quad.length || !(size > 0) || !(length > 0)) return [];
+
+  const corner = quad[cornerIndex];
+  if (!Number.isFinite(corner?.x) || !Number.isFinite(corner?.y)) return [];
+  const center = { x: size / 2, y: size / 2 };
+  const halfLength = length / 2;
+  const neighborIndices = [(cornerIndex + 3) % 4, (cornerIndex + 1) % 4];
+
+  return neighborIndices.flatMap((neighborIndex) => {
+    const neighbor = quad[neighborIndex];
+    const deltaX = neighbor?.x - corner.x;
+    const deltaY = neighbor?.y - corner.y;
+    const edgeLength = Math.hypot(deltaX, deltaY);
+    if (!(edgeLength > 1e-8)) return [];
+    const unitX = deltaX / edgeLength;
+    const unitY = deltaY / edgeLength;
+    return [{
+      start: {
+        x: center.x - (unitX * halfLength),
+        y: center.y - (unitY * halfLength),
+      },
+      end: {
+        x: center.x + (unitX * halfLength),
+        y: center.y + (unitY * halfLength),
+      },
+    }];
+  });
 }

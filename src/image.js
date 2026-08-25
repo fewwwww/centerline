@@ -48,6 +48,30 @@ export const MAX_WORKING_EDGE = 4096;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const scriptLoads = new WeakMap();
 
+export function createImageSession(originalBlob) {
+  if (!originalBlob) throw new TypeError("An original image blob is required");
+  return {
+    originalBlob,
+    workingBlob: originalBlob,
+    correctionBlob: originalBlob,
+  };
+}
+
+export function beginImageCorrection(session) {
+  if (!session) return null;
+  return { ...session, correctionBlob: session.workingBlob };
+}
+
+export function restoreOriginalCorrection(session) {
+  if (!session) return null;
+  return { ...session, correctionBlob: session.originalBlob };
+}
+
+export function commitWorkingImage(session, workingBlob) {
+  if (!session || !workingBlob) throw new TypeError("An image session and working blob are required");
+  return { ...session, workingBlob, correctionBlob: workingBlob };
+}
+
 function getExtension(fileName = "") {
   const parts = fileName.toLowerCase().split(".");
   return parts.length > 1 ? parts.at(-1) : "";
