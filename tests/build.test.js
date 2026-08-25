@@ -27,6 +27,7 @@ test("static build contains only deployable browser assets", async () => {
     "src/app.js",
     "src/image.js",
     "src/measurement.js",
+    "src/perspective.js",
     "src/viewport.js",
   ];
 
@@ -53,24 +54,24 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
     readFile(new URL("assets/og-card-centering.png", projectUrl)),
   ]);
 
-  assert.match(html, /<title>卡牌居中测量器 - CENTERLINE<\/title>/);
+  assert.match(html, /<title>卡牌居中测量与图片校正 - CENTERLINE<\/title>/);
   assert.match(
     html,
-    /name="description"[\s\S]*CENTERLINE 是免费的卡牌居中测量器。上传球星卡或收藏卡图片/,
+    /name="description"[\s\S]*CENTERLINE 可在浏览器本地裁剪和拉正卡牌图片/,
   );
   assert.match(html, /name="robots"[\s\S]*max-image-preview:large/);
   assert.match(html, /name="author" content="msfew"/);
-  assert.match(html, /property="og:title" content="CENTERLINE｜卡牌居中测量器"/);
+  assert.match(html, /property="og:title" content="CENTERLINE｜卡牌居中测量与图片校正"/);
   assert.match(
     html,
-    /property="og:description"[\s\S]*上传卡牌图片，拖动八条参考线，即时计算左右与上下居中比例/,
+    /property="og:description"[\s\S]*上传或粘贴卡牌图片，本地裁剪、拉直和校正透视/,
   );
   assert.match(html, /property="og:site_name" content="CENTERLINE"/);
   assert.match(html, /property="og:locale" content="zh_CN"/);
   assert.match(html, /property="og:image:width" content="1731"/);
   assert.match(html, /property="og:image:height" content="909"/);
   assert.match(html, /name="twitter:card"/);
-  assert.match(html, /name="twitter:title" content="CENTERLINE｜卡牌居中测量器"/);
+  assert.match(html, /name="twitter:title" content="CENTERLINE｜卡牌居中测量与图片校正"/);
   assert.match(html, /name="twitter:image:alt"/);
   assert.match(html, /<!-- build:site-metadata -->/);
   assert.match(html, /rel="author" href="https:\/\/sny\.is"/);
@@ -89,12 +90,12 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
 test("web app manifest keeps icons inside the GitHub Pages subpath", async () => {
   const manifest = JSON.parse(await readFile(new URL("site.webmanifest", distUrl), "utf8"));
 
-  assert.equal(manifest.name, "CENTERLINE 卡牌居中测量器");
+  assert.equal(manifest.name, "CENTERLINE 卡牌居中测量与图片校正");
   assert.equal(manifest.short_name, "CENTERLINE");
   assert.equal(manifest.lang, "zh-CN");
   assert.equal(
     manifest.description,
-    "用八条参考线即时测量卡牌左右与上下居中比例，图片只在浏览器本地处理。",
+    "本地裁剪和拉正卡牌图片，用八条参考线测量左右与上下居中比例及 PSA 居中等级上限。",
   );
   assert.equal(manifest.start_url, "./");
   assert.equal(manifest.scope, "./");
@@ -127,7 +128,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       readFile(new URL("sitemap.xml", distUrl), "utf8"),
     ]);
 
-    assert.ok(stdout.includes(`Built 19 static files into dist for ${siteUrl}`));
+    assert.ok(stdout.includes(`Built 20 static files into dist for ${siteUrl}`));
     assert.ok(html.includes(`<link rel="canonical" href="${siteUrl}"`));
     assert.ok(html.includes(`<meta property="og:url" content="${siteUrl}"`));
     assert.ok(html.includes(
@@ -164,6 +165,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       "球星卡居中",
       "收藏卡居中比例",
       "卡牌边框测量",
+      "Edgegrading without ads",
     ]);
     assert.equal(author.name, "msfew");
     assert.equal(author.url, "https://sny.is/");
@@ -210,9 +212,10 @@ test("HTTP preview metadata never claims a secure Open Graph image", async () =>
 });
 
 test("viewport and guide style contracts stay explicit", async () => {
-  const [styles, html] = await Promise.all([
+  const [styles, html, perspective] = await Promise.all([
     readFile(new URL("styles.css", projectUrl), "utf8"),
     readFile(new URL("index.html", projectUrl), "utf8"),
+    readFile(new URL("src/perspective.js", projectUrl), "utf8"),
   ]);
 
   assert.match(styles, /height:\s*100dvh/);
@@ -227,5 +230,6 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(html, /id="zoom-in-button"/);
   assert.match(html, /滚轮或双指缩放，拖动图片定位/);
   assert.match(styles, /\.brand-credit a\s*\{[\s\S]*?text-decoration:\s*underline/);
+  assert.match(perspective, /UNPACK_FLIP_Y_WEBGL, false/);
   assert.doesNotMatch(html, /实线/);
 });

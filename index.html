@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>卡牌居中测量器 - CENTERLINE</title>
+    <title>卡牌居中测量与图片校正 - CENTERLINE</title>
     <meta
       name="description"
-      content="CENTERLINE 是免费的卡牌居中测量器。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。"
+      content="CENTERLINE 可在浏览器本地裁剪和拉正卡牌图片，用八条参考线测量左右与上下居中比例，并实时给出 PSA 居中等级上限。"
     />
     <meta name="author" content="msfew" />
     <meta
@@ -21,20 +21,20 @@
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
     <meta property="og:site_name" content="CENTERLINE" />
-    <meta property="og:title" content="CENTERLINE｜卡牌居中测量器" />
+    <meta property="og:title" content="CENTERLINE｜卡牌居中测量与图片校正" />
     <meta
       property="og:description"
-      content="上传卡牌图片，拖动八条参考线，即时计算左右与上下居中比例；手机和 PC 均可使用，图片只在浏览器本地处理。"
+      content="上传或粘贴卡牌图片，本地裁剪、拉直和校正透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
     />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1731" />
     <meta property="og:image:height" content="909" />
     <meta property="og:image:alt" content="CENTERLINE 卡牌居中测量器界面预览" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="CENTERLINE｜卡牌居中测量器" />
+    <meta name="twitter:title" content="CENTERLINE｜卡牌居中测量与图片校正" />
     <meta
       name="twitter:description"
-      content="上传卡牌图片，拖动八条参考线，即时计算左右与上下居中比例；手机和 PC 均可使用，图片只在浏览器本地处理。"
+      content="上传或粘贴卡牌图片，本地裁剪、拉直和校正透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
     />
     <meta name="twitter:image:alt" content="CENTERLINE 卡牌居中测量器界面预览" />
     <!-- build:site-metadata -->
@@ -71,12 +71,12 @@
             <p class="eyebrow">卡牌居中 · 手动测量</p>
             <h1 id="upload-title">卡牌居中比例，<br />左右上下量清楚。</h1>
             <p class="hero-description">
-              上传球星卡或收藏卡图片，把八条参考线对准卡片外沿和图案内沿，即时得到左右、上下居中比例。
+              上传或粘贴卡牌图片，先裁剪并拉正透视，再用八条参考线测量左右、上下居中比例与 PSA 居中等级上限。
             </p>
             <div class="feature-list" aria-label="产品特点">
-              <span>8 条手动参考线</span>
+              <span>裁剪与透视校正</span>
               <span>左右 / 上下比例</span>
-              <span>手机与 PC 通用</span>
+              <span>PSA 居中等级上限</span>
             </div>
           </div>
 
@@ -119,8 +119,15 @@
                 选择图片
               </button>
               <button class="button button-secondary camera-button" id="take-photo-button" type="button">
-                <span class="button-icon camera-icon" aria-hidden="true"></span>
+                <svg class="button-icon camera-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8.4 5.5 9.8 3.8h4.4l1.4 1.7H19a2 2 0 0 1 2 2v9.7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2h3.4Z"></path>
+                  <circle cx="12" cy="12.2" r="3.4"></circle>
+                </svg>
                 拍照
+              </button>
+              <button class="button button-secondary paste-button" id="paste-image-button" type="button">
+                <span class="button-icon" aria-hidden="true">⌘</span>
+                粘贴图片
               </button>
             </div>
 
@@ -145,6 +152,69 @@
           </div>
         </section>
 
+        <section class="correction-view view" id="correction-view" aria-labelledby="correction-title" hidden>
+          <div class="correction-heading">
+            <div>
+              <p class="eyebrow">LOCAL PHOTO CORRECTION</p>
+              <h1 id="correction-title">裁剪并拉正卡片</h1>
+              <p>把四个角拖到卡片角点，再用拉直、上下透视和左右透视贴合辅助网格。</p>
+            </div>
+            <div class="correction-actions correction-actions-top">
+              <button class="button button-secondary compact" id="correction-reset-button" type="button">还原</button>
+              <button class="button button-secondary compact" id="correction-cancel-button" type="button">取消</button>
+              <button class="button button-dark compact" id="correction-apply-button" type="button">应用校正</button>
+            </div>
+          </div>
+
+          <div class="correction-workspace">
+            <div class="correction-preview-card">
+              <div class="correction-frame" id="correction-frame">
+                <canvas id="correction-canvas" aria-label="图片裁剪与透视校正预览"></canvas>
+                <canvas id="correction-result-canvas" aria-label="校正后的效果预览" hidden></canvas>
+                <div class="correction-handles" id="correction-handles" aria-label="裁剪角点"></div>
+                <button class="compare-button" id="correction-compare-button" type="button">按住预览校正</button>
+              </div>
+            </div>
+
+            <aside class="correction-panel" aria-label="图片校正控制">
+              <div class="geometry-advice" id="geometry-advice" data-level="direct">
+                <strong id="geometry-advice-title">四角对准后：拍摄角度良好，可直接测量</strong>
+                <span>只判断拍摄透视，不代表卡片物理平整度。</span>
+              </div>
+
+              <fieldset class="aspect-controls">
+                <legend>裁剪比例</legend>
+                <div class="segmented-control" id="aspect-control">
+                  <button type="button" data-aspect="free" aria-pressed="true">自由</button>
+                  <button type="button" data-aspect="original" aria-pressed="false">原图</button>
+                  <button type="button" data-aspect="5:7" aria-pressed="false">5:7</button>
+                </div>
+              </fieldset>
+
+              <div class="correction-sliders">
+                <label>
+                  <span>拉直 <output id="straighten-value">0.0°</output></span>
+                  <input id="straighten-control" type="range" min="-15" max="15" step="0.1" value="0" />
+                </label>
+                <label>
+                  <span>上下透视 <output id="vertical-perspective-value">0</output></span>
+                  <input id="vertical-perspective-control" type="range" min="-100" max="100" step="1" value="0" />
+                </label>
+                <label>
+                  <span>左右透视 <output id="horizontal-perspective-value">0</output></span>
+                  <input id="horizontal-perspective-control" type="range" min="-100" max="100" step="1" value="0" />
+                </label>
+              </div>
+
+              <p class="correction-note" id="correction-renderer-note">网格和四角均在浏览器本地运算。应用校正后参考线会重置。</p>
+              <div class="correction-actions correction-actions-bottom">
+                <button class="button button-secondary" id="correction-cancel-button-bottom" type="button">取消</button>
+                <button class="button button-dark" id="correction-apply-button-bottom" type="button">应用校正</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
         <section class="editor-view view" id="editor-view" aria-labelledby="editor-title" hidden>
           <div class="editor-heading">
             <div>
@@ -153,6 +223,7 @@
               <p>缩放并拖动图片查看边角，再把八条虚线分别对准卡片外沿和图案内沿。</p>
             </div>
             <div class="editor-actions">
+              <button class="button button-secondary compact" id="correct-image-button" type="button">裁剪 / 拉正</button>
               <button class="button button-secondary compact" id="reset-guides-button" type="button">
                 重置参考线
               </button>
@@ -191,6 +262,18 @@
                 </div>
               </div>
 
+              <div class="psa-result" id="psa-result">
+                <div class="psa-title-row">
+                  <span>PSA 居中上限</span>
+                  <div class="surface-toggle" role="group" aria-label="卡片正反面">
+                    <button id="psa-front-button" type="button" aria-pressed="true">正面</button>
+                    <button id="psa-back-button" type="button" aria-pressed="false">背面</button>
+                  </div>
+                </div>
+                <output id="psa-output" aria-label="PSA 居中预估上限">PSA 10</output>
+                <span id="psa-detail">左右与上下共同决定 · 50 / 50</span>
+              </div>
+
               <div class="measurement-status" id="measurement-status">
                 <span class="status-check" aria-hidden="true">✓</span>
                 <span id="measurement-status-text">参考线已形成有效边框</span>
@@ -204,7 +287,7 @@
                 </ul>
               </div>
 
-              <p class="result-disclaimer">仅表示图片中的边框比例，不代表评级结果。</p>
+              <p class="result-disclaimer">仅根据居中估算等级上限，不代表 PSA 最终评级。</p>
             </aside>
 
             <div class="image-column">
@@ -223,8 +306,10 @@
                   aria-label="图片查看区域。可拖动图片，使用滚轮、双指或缩放按钮放大缩小。"
                   aria-describedby="image-caption"
                 >
-                  <img class="source-image" id="source-image" alt="待测量的卡牌图片" draggable="false" />
-                  <div class="guide-layer" id="guide-layer"></div>
+                  <div class="image-canvas" id="image-canvas">
+                    <img class="source-image" id="source-image" alt="待测量的卡牌图片" draggable="false" />
+                    <div class="guide-layer" id="guide-layer"></div>
+                  </div>
                 </div>
               </div>
               <p class="image-caption" id="image-caption">
@@ -239,7 +324,7 @@
       </main>
 
       <footer class="site-footer">
-        <span>Card Centering Tool · v0.1</span>
+        <span>CENTERLINE · v0.2</span>
         <span>图片本地处理，不保存，不上传</span>
       </footer>
     </div>

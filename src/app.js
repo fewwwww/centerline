@@ -2,30 +2,39 @@ import {
   DEFAULT_GUIDES,
   GUIDE_AXIS,
   calculateMeasurements,
+  estimatePsaCentering,
   formatRatio,
   moveGuide,
 } from "./measurement.js";
 import {
-  convertHeicToJpeg,
-  decodeTiffToRgba,
-  isGifFile,
+  MAX_WORKING_EDGE,
+  canvasToBlob,
   isHeicFile,
-  isSupportedImageFile,
   isTiffFile,
+  prepareWorkingImage,
+  validateImageFile,
 } from "./image.js";
 import {
   MAX_VIEW_ZOOM,
   MIN_VIEW_ZOOM,
   VIEW_ZOOM_STEP,
   clampViewState,
+  computeContainSize,
   guideScreenWidth,
   panView,
   pinchView,
   zoomViewAt,
 } from "./viewport.js";
-
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const MAX_WORKING_EDGE = 4096;
+import {
+  assessCaptureGeometry,
+  correctionOutputSize,
+  correctionSampleQuad,
+  createCorrectionRecipe,
+  effectiveQuad,
+  isConvexQuad,
+  requiresProjectiveCorrection,
+  renderCorrectionToCanvas,
+} from "./perspective.js";
 
 const GUIDE_META = [
   { key: "outerLeft", label: "左外沿", short: "外", direction: "left", kind: "outer", axis: "vertical", handle: "42%" },
@@ -42,11 +51,13 @@ const elements = {
   uploadView: document.querySelector("#upload-view"),
   processingView: document.querySelector("#processing-view"),
   editorView: document.querySelector("#editor-view"),
+  correctionView: document.querySelector("#correction-view"),
   dropZone: document.querySelector("#drop-zone"),
   fileInput: document.querySelector("#file-input"),
   cameraInput: document.querySelector("#camera-input"),
   chooseImageButton: document.querySelector("#choose-image-button"),
   takePhotoButton: document.querySelector("#take-photo-button"),
+  pasteImageButton: document.querySelector("#paste-image-button"),
   processingMessage: document.querySelector("#processing-message"),
   processingChangeButton: document.querySelector("#processing-change-button"),
   uploadError: document.querySelector("#upload-error"),
@@ -54,7 +65,9 @@ const elements = {
   uploadErrorDetail: document.querySelector("#upload-error-detail"),
   resetGuidesButton: document.querySelector("#reset-guides-button"),
   changeImageButton: document.querySelector("#change-image-button"),
+  correctImageButton: document.querySelector("#correct-image-button"),
   measurementFrame: document.querySelector("#measurement-frame"),
+  imageCanvas: document.querySelector("#image-canvas"),
   guideLayer: document.querySelector("#guide-layer"),
   sourceImage: document.querySelector("#source-image"),
   zoomOutButton: document.querySelector("#zoom-out-button"),
@@ -69,6 +82,30 @@ const elements = {
   verticalBarFirst: document.querySelector("#vertical-bar-first"),
   measurementStatus: document.querySelector("#measurement-status"),
   measurementStatusText: document.querySelector("#measurement-status-text"),
+  psaOutput: document.querySelector("#psa-output"),
+  psaDetail: document.querySelector("#psa-detail"),
+  psaFrontButton: document.querySelector("#psa-front-button"),
+  psaBackButton: document.querySelector("#psa-back-button"),
+  correctionFrame: document.querySelector("#correction-frame"),
+  correctionCanvas: document.querySelector("#correction-canvas"),
+  correctionResultCanvas: document.querySelector("#correction-result-canvas"),
+  correctionHandles: document.querySelector("#correction-handles"),
+  correctionCompareButton: document.querySelector("#correction-compare-button"),
+  correctionResetButton: document.querySelector("#correction-reset-button"),
+  correctionCancelButton: document.querySelector("#correction-cancel-button"),
+  correctionCancelButtonBottom: document.querySelector("#correction-cancel-button-bottom"),
+  correctionApplyButton: document.querySelector("#correction-apply-button"),
+  correctionApplyButtonBottom: document.querySelector("#correction-apply-button-bottom"),
+  aspectControl: document.querySelector("#aspect-control"),
+  straightenControl: document.querySelector("#straighten-control"),
+  straightenValue: document.querySelector("#straighten-value"),
+  verticalPerspectiveControl: document.querySelector("#vertical-perspective-control"),
+  verticalPerspectiveValue: document.querySelector("#vertical-perspective-value"),
+  horizontalPerspectiveControl: document.querySelector("#horizontal-perspective-control"),
+  horizontalPerspectiveValue: document.querySelector("#horizontal-perspective-value"),
+  geometryAdvice: document.querySelector("#geometry-advice"),
+  geometryAdviceTitle: document.querySelector("#geometry-advice-title"),
+  correctionRendererNote: document.querySelector("#correction-renderer-note"),
   resultAnnouncer: document.querySelector("#result-announcer"),
 };
 
@@ -76,6 +113,7 @@ let guides = { ...DEFAULT_GUIDES };
 let guideButtons = new Map();
 let activeDrag = null;
 let currentImageUrl = null;
+let currentWorkingBlob = null;
 let processingTimers = [];
 let announceTimer = null;
 let imageLoadSequence = 0;
@@ -83,12 +121,72 @@ let viewState = { zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 };
 const imagePointers = new Map();
 let panGesture = null;
 let pinchGesture = null;
+let psaSide = "front";
+let correctionRecipe = createCorrectionRecipe();
+let correctionPreviewRect = { left: 0, top: 0, width: 0, height: 0 };
+let activeCornerDrag = null;
+let correctionRenderFrame = null;
 
 function showView(view) {
-  [elements.uploadView, elements.processingView, elements.editorView].forEach((candidate) => {
+  [elements.uploadView, elements.processingView, elements.correctionView, elements.editorView].forEach((candidate) => {
     candidate.hidden = candidate !== view;
   });
   document.body.dataset.view = view.id;
+}
+
+function notifyUser(title, detail = "") {
+  let notice = document.querySelector("#app-notice");
+  if (!notice) {
+    notice = document.createElement("div");
+    notice.id = "app-notice";
+    notice.className = "app-notice";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    document.body.append(notice);
+  }
+  notice.replaceChildren();
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  notice.append(strong);
+  if (detail) {
+    const span = document.createElement("span");
+    span.textContent = detail;
+    notice.append(span);
+  }
+  notice.classList.add("is-visible");
+  window.clearTimeout(notice.hideTimer);
+  notice.hideTimer = window.setTimeout(() => notice.classList.remove("is-visible"), 3600);
+}
+
+function confirmImageReplacement(description) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML = `
+      <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="replace-title" aria-describedby="replace-detail">
+        <strong id="replace-title">替换当前图片？</strong>
+        <p id="replace-detail">${description}会替换当前图片，并重置参考线和缩放位置。</p>
+        <div>
+          <button class="button button-secondary" type="button" data-choice="cancel">保留当前图片</button>
+          <button class="button button-dark" type="button" data-choice="replace">替换图片</button>
+        </div>
+      </div>
+    `;
+    const finish = (accepted) => {
+      overlay.remove();
+      resolve(accepted);
+    };
+    overlay.addEventListener("click", (event) => {
+      const choice = event.target.closest("[data-choice]")?.dataset.choice;
+      if (choice) finish(choice === "replace");
+      if (event.target === overlay) finish(false);
+    });
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") finish(false);
+    });
+    document.body.append(overlay);
+    overlay.querySelector('[data-choice="cancel"]').focus();
+  });
 }
 
 function clearProcessingTimers() {
@@ -107,24 +205,6 @@ function showUploadError(title, detail) {
   elements.uploadErrorDetail.textContent = detail;
   elements.uploadError.hidden = false;
   showView(elements.uploadView);
-}
-
-function validateFile(file) {
-  if (!isSupportedImageFile(file)) {
-    return {
-      title: "暂不支持这个文件",
-      detail: "请选择 JPG、PNG、WebP、HEIC、AVIF、GIF、BMP 或 TIFF 图片。",
-    };
-  }
-
-  if (file.size > MAX_FILE_BYTES) {
-    return {
-      title: "图片超过 25MB",
-      detail: "请压缩图片后重试，或选择一张更小的图片。",
-    };
-  }
-
-  return null;
 }
 
 function startProcessingState() {
@@ -147,159 +227,6 @@ function startProcessingState() {
   );
 }
 
-async function loadImageElement(blob) {
-  const objectUrl = URL.createObjectURL(blob);
-  const image = new Image();
-  image.decoding = "async";
-  image.src = objectUrl;
-
-  try {
-    await image.decode();
-    return { image, objectUrl };
-  } catch (error) {
-    URL.revokeObjectURL(objectUrl);
-    throw error;
-  }
-}
-
-async function decodeSource(file) {
-  if ("createImageBitmap" in window) {
-    try {
-      return await createImageBitmap(file, { imageOrientation: "from-image" });
-    } catch {
-      // Safari and some image codecs need the HTMLImageElement fallback.
-    }
-  }
-
-  const { image, objectUrl } = await loadImageElement(file);
-  image.releaseObjectUrl = () => URL.revokeObjectURL(objectUrl);
-  return image;
-}
-
-function sourceDimensions(source) {
-  return {
-    width: source.naturalWidth || source.width,
-    height: source.naturalHeight || source.height,
-  };
-}
-
-function releaseDecodedSource(source) {
-  if (typeof source.close === "function") {
-    source.close();
-  }
-  if (typeof source.releaseObjectUrl === "function") {
-    source.releaseObjectUrl();
-  }
-}
-
-function canvasToBlob(canvas, type, quality) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error("Could not create working image"));
-      }
-    }, type, quality);
-  });
-}
-
-async function prepareWorkingImage(file) {
-  if (isHeicFile(file)) {
-    const nativeSource = await tryDecodeSource(file);
-    if (nativeSource) {
-      return await decodedSourceToBlob(nativeSource, "image/jpeg", 0.92);
-    }
-    return normalizeWorkingImage(await convertHeicToJpeg(file));
-  }
-
-  if (isTiffFile(file)) {
-    const nativeSource = await tryDecodeSource(file);
-    if (nativeSource) {
-      return await decodedSourceToBlob(nativeSource, "image/png", 1);
-    }
-    return tiffToPngBlob(file);
-  }
-
-  if (isGifFile(file)) {
-    const source = await decodeSource(file);
-    return decodedSourceToBlob(source, "image/png", 1);
-  }
-
-  return normalizeWorkingImage(file);
-}
-
-async function tryDecodeSource(file) {
-  try {
-    return await decodeSource(file);
-  } catch {
-    return null;
-  }
-}
-
-async function normalizeWorkingImage(file) {
-  const source = await decodeSource(file);
-  const { width, height } = sourceDimensions(source);
-
-  if (!width || !height) {
-    releaseDecodedSource(source);
-    throw new Error("Image has no dimensions");
-  }
-
-  const longestEdge = Math.max(width, height);
-  if (longestEdge <= MAX_WORKING_EDGE) {
-    releaseDecodedSource(source);
-    return file;
-  }
-
-  return decodedSourceToBlob(source, file.type === "image/png" ? "image/png" : "image/jpeg", 0.92);
-}
-
-async function tiffToPngBlob(file) {
-  const { width, height, data } = await decodeTiffToRgba(file);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is unavailable");
-
-  context.putImageData(new ImageData(data, width, height), 0, 0);
-
-  if (Math.max(width, height) <= MAX_WORKING_EDGE) {
-    return canvasToBlob(canvas, "image/png", 1);
-  }
-  return decodedSourceToBlob(canvas, "image/png", 1);
-}
-
-async function decodedSourceToBlob(source, outputType, quality) {
-  const { width, height } = sourceDimensions(source);
-  if (!width || !height) {
-    releaseDecodedSource(source);
-    throw new Error("Image has no dimensions");
-  }
-
-  const longestEdge = Math.max(width, height);
-  const scale = MAX_WORKING_EDGE / longestEdge;
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(width * Math.min(1, scale));
-  canvas.height = Math.round(height * Math.min(1, scale));
-  const context = canvas.getContext("2d", { alpha: outputType === "image/png" });
-
-  if (!context) {
-    releaseDecodedSource(source);
-    throw new Error("Canvas is unavailable");
-  }
-
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  try {
-    context.drawImage(source, 0, 0, canvas.width, canvas.height);
-    return await canvasToBlob(canvas, outputType, quality);
-  } finally {
-    releaseDecodedSource(source);
-  }
-}
-
 function replaceCurrentImageUrl(blob) {
   if (currentImageUrl) {
     URL.revokeObjectURL(currentImageUrl);
@@ -309,23 +236,33 @@ function replaceCurrentImageUrl(blob) {
 }
 
 async function displayWorkingImage(blob) {
+  currentWorkingBlob = blob;
   elements.sourceImage.src = replaceCurrentImageUrl(blob);
   await elements.sourceImage.decode();
-  resetView();
 }
 
-async function handleFile(file) {
+async function handleFile(file, source = "file") {
   if (!file) return;
 
-  const loadId = ++imageLoadSequence;
-  clearUploadError();
-  const validationError = validateFile(file);
+  const validationError = validateImageFile(file);
   if (validationError) {
     clearProcessingTimers();
-    showUploadError(validationError.title, validationError.detail);
+    if (currentWorkingBlob && document.body.dataset.view !== "upload-view") {
+      notifyUser(validationError.title, validationError.detail);
+    } else {
+      showUploadError(validationError.title, validationError.detail);
+    }
     return;
   }
 
+  if (currentWorkingBlob && !["upload-view", "processing-view"].includes(document.body.dataset.view)) {
+    const description = source === "paste" ? "粘贴的图片" : "新选择的图片";
+    if (!await confirmImageReplacement(description)) return;
+  }
+
+  const loadId = ++imageLoadSequence;
+  const hadCurrentImage = Boolean(currentWorkingBlob);
+  clearUploadError();
   startProcessingState();
 
   try {
@@ -340,17 +277,26 @@ async function handleFile(file) {
     renderGuides();
     updateResults();
     showView(elements.editorView);
-    window.requestAnimationFrame(() => renderGuides());
+    window.requestAnimationFrame(() => {
+      updateImageCanvasSize();
+      resetView();
+      renderGuides();
+    });
   } catch {
     if (loadId !== imageLoadSequence) return;
 
     clearProcessingTimers();
-    if (isHeicFile(file)) {
-      showUploadError("HEIC 图片无法读取", "请确认文件没有损坏；如果图片来自 iCloud，请先下载原图后重试。");
-    } else if (isTiffFile(file)) {
-      showUploadError("TIFF 图片无法读取", "请确认文件没有损坏，或把多页 TIFF 导出为单张 PNG 后重试。");
+    const errorMessage = isHeicFile(file)
+      ? ["HEIC 图片无法读取", "请确认文件没有损坏；如果图片来自 iCloud，请先下载原图后重试。"]
+      : isTiffFile(file)
+        ? ["TIFF 图片无法读取", "请确认文件没有损坏，或把多页 TIFF 导出为单张 PNG 后重试。"]
+        : ["图片无法读取", "当前浏览器无法解码该格式，或文件可能已经损坏。"];
+    if (hadCurrentImage) {
+      showView(elements.editorView);
+      window.requestAnimationFrame(updateImageCanvasSize);
+      notifyUser(...errorMessage);
     } else {
-      showUploadError("图片无法读取", "当前浏览器无法解码该格式，或文件可能已经损坏。");
+      showUploadError(...errorMessage);
     }
   }
 }
@@ -487,6 +433,21 @@ function updateResults() {
   elements.measurementStatusText.textContent = valid
     ? "参考线已形成有效边框"
     : "当前没有形成可测量的边框，请调整参考线";
+
+  const psa = estimatePsaCentering(results, psaSide);
+  elements.psaOutput.value = psa.label;
+  elements.psaOutput.textContent = psa.label;
+  elements.psaDetail.textContent = psa.valid
+    ? `${psa.determiningAxis}决定 · 较偏一侧 ${psa.worst}%`
+    : "请先完成四边参考线";
+}
+
+function setPsaSide(side) {
+  psaSide = side === "back" ? "back" : "front";
+  elements.psaFrontButton.setAttribute("aria-pressed", String(psaSide === "front"));
+  elements.psaBackButton.setAttribute("aria-pressed", String(psaSide === "back"));
+  updateResults();
+  announceResults();
 }
 
 function currentResultAnnouncement() {
@@ -494,7 +455,8 @@ function currentResultAnnouncement() {
   if (!results.horizontal.valid || !results.vertical.valid) {
     return "当前没有形成可测量的边框";
   }
-  return `左右居中 ${formatRatio(results.horizontal)}，上下居中 ${formatRatio(results.vertical)}`;
+  const psa = estimatePsaCentering(results, psaSide);
+  return `左右居中 ${formatRatio(results.horizontal)}，上下居中 ${formatRatio(results.vertical)}，${psa.label}，仅为居中上限`;
 }
 
 function announceResults() {
@@ -520,7 +482,23 @@ function viewSize() {
   return {
     width: elements.measurementFrame.clientWidth,
     height: elements.measurementFrame.clientHeight,
+    contentWidth: elements.imageCanvas.clientWidth,
+    contentHeight: elements.imageCanvas.clientHeight,
   };
+}
+
+function updateImageCanvasSize() {
+  const viewportWidth = elements.measurementFrame.clientWidth;
+  const viewportHeight = elements.measurementFrame.clientHeight;
+  const imageWidth = elements.sourceImage.naturalWidth;
+  const imageHeight = elements.sourceImage.naturalHeight;
+  const fitted = computeContainSize(viewportWidth, viewportHeight, imageWidth, imageHeight);
+  if (!fitted.width || !fitted.height) return;
+  elements.imageCanvas.style.width = `${fitted.width}px`;
+  elements.imageCanvas.style.height = `${fitted.height}px`;
+  const { width, height, contentWidth, contentHeight } = viewSize();
+  viewState = clampViewState(viewState, width, height, contentWidth, contentHeight);
+  renderView();
 }
 
 function renderView() {
@@ -544,8 +522,8 @@ function renderView() {
 }
 
 function setView(nextState) {
-  const { width, height } = viewSize();
-  viewState = clampViewState(nextState, width, height);
+  const { width, height, contentWidth, contentHeight } = viewSize();
+  viewState = clampViewState(nextState, width, height, contentWidth, contentHeight);
   renderView();
 }
 
@@ -559,16 +537,34 @@ function resetView() {
 
 function zoomAtPoint(requestedZoom, clientX, clientY) {
   const rect = elements.measurementFrame.getBoundingClientRect();
-  const { width, height } = viewSize();
+  const { width, height, contentWidth, contentHeight } = viewSize();
   const focalX = clientX - (rect.left + rect.width / 2);
   const focalY = clientY - (rect.top + rect.height / 2);
-  viewState = zoomViewAt(viewState, requestedZoom, focalX, focalY, width, height);
+  viewState = zoomViewAt(
+    viewState,
+    requestedZoom,
+    focalX,
+    focalY,
+    width,
+    height,
+    contentWidth,
+    contentHeight,
+  );
   renderView();
 }
 
 function zoomAtCenter(requestedZoom) {
-  const { width, height } = viewSize();
-  viewState = zoomViewAt(viewState, requestedZoom, 0, 0, width, height);
+  const { width, height, contentWidth, contentHeight } = viewSize();
+  viewState = zoomViewAt(
+    viewState,
+    requestedZoom,
+    0,
+    0,
+    width,
+    height,
+    contentWidth,
+    contentHeight,
+  );
   renderView();
 }
 
@@ -628,7 +624,7 @@ function beginImageGesture(event) {
 function moveImageGesture(event) {
   if (!imagePointers.has(event.pointerId)) return;
   imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  const { width, height } = viewSize();
+  const { width, height, contentWidth, contentHeight } = viewSize();
 
   if (imagePointers.size >= 2 && pinchGesture) {
     const metrics = pointerPairMetrics();
@@ -641,6 +637,8 @@ function moveImageGesture(event) {
         metrics.center,
         width,
         height,
+        contentWidth,
+        contentHeight,
       );
       renderView();
     }
@@ -651,6 +649,8 @@ function moveImageGesture(event) {
       event.clientY - panGesture.y,
       width,
       height,
+      contentWidth,
+      contentHeight,
     );
     renderView();
   }
@@ -707,14 +707,362 @@ function handleImageKeydown(event) {
     const distance = event.shiftKey ? 48 : 16;
     const deltaX = event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0;
     const deltaY = event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0;
-    const { width, height } = viewSize();
-    viewState = panView(viewState, deltaX, deltaY, width, height);
+    const { width, height, contentWidth, contentHeight } = viewSize();
+    viewState = panView(
+      viewState,
+      deltaX,
+      deltaY,
+      width,
+      height,
+      contentWidth,
+      contentHeight,
+    );
     renderView();
   } else {
     return;
   }
 
   event.preventDefault();
+}
+
+function clipboardFile(blob) {
+  const extension = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+  return new File([blob], `pasted-image.${extension}`, { type: blob.type || "image/png" });
+}
+
+async function pasteImageFromButton() {
+  if (!navigator.clipboard?.read) {
+    notifyUser("当前浏览器不支持按钮读取剪贴板", "可以直接按 Command / Ctrl + V，或使用“选择图片”。");
+    return;
+  }
+
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imageType = item.types.find((type) => type.startsWith("image/"));
+      if (imageType) {
+        await handleFile(clipboardFile(await item.getType(imageType)), "paste");
+        return;
+      }
+    }
+    notifyUser("剪贴板里没有可读取的图片", "请先在相册、聊天或网页中复制一张图片。");
+  } catch (error) {
+    const denied = error?.name === "NotAllowedError";
+    notifyUser(
+      denied ? "没有获得剪贴板权限" : "无法读取剪贴板",
+      "你仍可使用“选择图片”或直接按 Command / Ctrl + V。",
+    );
+  }
+}
+
+function handlePaste(event) {
+  const item = [...(event.clipboardData?.items || [])].find(
+    (candidate) => candidate.kind === "file" && candidate.type.startsWith("image/"),
+  );
+  if (!item) return;
+  const file = item.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+  handleFile(file, "paste");
+}
+
+function correctionPointToScreen(point) {
+  return {
+    x: correctionPreviewRect.left + (point.x * correctionPreviewRect.width),
+    y: correctionPreviewRect.top + (point.y * correctionPreviewRect.height),
+  };
+}
+
+function svgLine(svg, className) {
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("class", className);
+  svg.append(line);
+  return line;
+}
+
+let correctionOverlaySvg = null;
+let correctionOutline = null;
+let correctionGridLines = [];
+let correctionHandleButtons = [];
+
+function mountCorrectionHandles() {
+  correctionOverlaySvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  correctionOverlaySvg.classList.add("correction-quad-overlay");
+  correctionOverlaySvg.setAttribute("aria-hidden", "true");
+  correctionOutline = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  correctionOutline.setAttribute("class", "correction-quad-outline");
+  correctionOverlaySvg.append(correctionOutline);
+  correctionGridLines = Array.from({ length: 6 }, (_, index) => (
+    svgLine(correctionOverlaySvg, index >= 4 ? "is-center" : "")
+  ));
+  elements.correctionHandles.append(correctionOverlaySvg);
+
+  correctionHandleButtons = Array.from({ length: 4 }, (_, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "corner-handle";
+    button.dataset.corner = String(index);
+    button.setAttribute("aria-label", `裁剪角点 ${index + 1}`);
+    button.addEventListener("pointerdown", beginCornerDrag);
+    button.addEventListener("pointermove", moveCornerDrag);
+    button.addEventListener("pointerup", endCornerDrag);
+    button.addEventListener("pointercancel", endCornerDrag);
+    elements.correctionHandles.append(button);
+    return button;
+  });
+}
+
+function setSvgLine(line, start, end) {
+  line.setAttribute("x1", start.x.toFixed(2));
+  line.setAttribute("y1", start.y.toFixed(2));
+  line.setAttribute("x2", end.x.toFixed(2));
+  line.setAttribute("y2", end.y.toFixed(2));
+}
+
+function interpolate(first, second, progress) {
+  return {
+    x: first.x + ((second.x - first.x) * progress),
+    y: first.y + ((second.y - first.y) * progress),
+  };
+}
+
+function renderCorrectionOverlay() {
+  const frameWidth = elements.correctionFrame.clientWidth;
+  const frameHeight = elements.correctionFrame.clientHeight;
+  if (!frameWidth || !frameHeight) return;
+  correctionOverlaySvg.setAttribute("viewBox", `0 0 ${frameWidth} ${frameHeight}`);
+
+  const basePoints = correctionRecipe.quad.map(correctionPointToScreen);
+  const adjustedPoints = correctionSampleQuad(
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+    correctionRecipe,
+  ).map(correctionPointToScreen);
+  correctionOutline.setAttribute(
+    "points",
+    adjustedPoints.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
+  );
+
+  [1 / 3, 2 / 3, 0.5].forEach((progress, index) => {
+    setSvgLine(
+      correctionGridLines[index],
+      interpolate(adjustedPoints[0], adjustedPoints[1], progress),
+      interpolate(adjustedPoints[3], adjustedPoints[2], progress),
+    );
+    setSvgLine(
+      correctionGridLines[index + 3],
+      interpolate(adjustedPoints[0], adjustedPoints[3], progress),
+      interpolate(adjustedPoints[1], adjustedPoints[2], progress),
+    );
+  });
+
+  correctionHandleButtons.forEach((button, index) => {
+    button.style.left = `${basePoints[index].x}px`;
+    button.style.top = `${basePoints[index].y}px`;
+  });
+}
+
+function drawCorrectionSource() {
+  const width = elements.correctionFrame.clientWidth;
+  const height = elements.correctionFrame.clientHeight;
+  if (!width || !height || !elements.sourceImage.naturalWidth) return;
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  elements.correctionCanvas.width = Math.round(width * pixelRatio);
+  elements.correctionCanvas.height = Math.round(height * pixelRatio);
+  const context = elements.correctionCanvas.getContext("2d", { alpha: true });
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const fitted = computeContainSize(
+    width,
+    height,
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+  );
+  correctionPreviewRect = {
+    left: (width - fitted.width) / 2,
+    top: (height - fitted.height) / 2,
+    width: fitted.width,
+    height: fitted.height,
+  };
+  context.drawImage(
+    elements.sourceImage,
+    correctionPreviewRect.left,
+    correctionPreviewRect.top,
+    fitted.width,
+    fitted.height,
+  );
+}
+
+function setCorrectionBusy(busy) {
+  [elements.correctionApplyButton, elements.correctionApplyButtonBottom].forEach((button) => {
+    button.disabled = busy;
+    button.textContent = busy ? "处理中…" : "应用校正";
+  });
+}
+
+function renderCorrectionUi() {
+  correctionRenderFrame = null;
+  renderCorrectionOverlay();
+  elements.straightenValue.textContent = `${Number(correctionRecipe.straighten).toFixed(1)}°`;
+  elements.verticalPerspectiveValue.textContent = String(Math.round(correctionRecipe.verticalPerspective));
+  elements.horizontalPerspectiveValue.textContent = String(Math.round(correctionRecipe.horizontalPerspective));
+  elements.aspectControl.querySelectorAll("button").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.aspect === correctionRecipe.aspect));
+  });
+  const assessment = assessCaptureGeometry(correctionRecipe);
+  elements.geometryAdvice.dataset.level = assessment.level;
+  elements.geometryAdviceTitle.textContent = `四角对准后：${assessment.label}`;
+  const canApply = isConvexQuad(effectiveQuad(correctionRecipe));
+  elements.correctionApplyButton.disabled = !canApply;
+  elements.correctionApplyButtonBottom.disabled = !canApply;
+}
+
+function scheduleCorrectionUi() {
+  if (correctionRenderFrame !== null) return;
+  correctionRenderFrame = window.requestAnimationFrame(renderCorrectionUi);
+}
+
+function resetCorrection() {
+  correctionRecipe = createCorrectionRecipe();
+  elements.straightenControl.value = "0";
+  elements.verticalPerspectiveControl.value = "0";
+  elements.horizontalPerspectiveControl.value = "0";
+  scheduleCorrectionUi();
+}
+
+function beginCornerDrag(event) {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  activeCornerDrag = { pointerId: event.pointerId, index: Number(event.currentTarget.dataset.corner) };
+  event.currentTarget.setPointerCapture(event.pointerId);
+  moveCornerDrag(event);
+  event.preventDefault();
+}
+
+function moveCornerDrag(event) {
+  if (!activeCornerDrag || activeCornerDrag.pointerId !== event.pointerId) return;
+  const frameRect = elements.correctionFrame.getBoundingClientRect();
+  const point = {
+    x: Math.min(0.995, Math.max(0.005, (event.clientX - frameRect.left - correctionPreviewRect.left) / correctionPreviewRect.width)),
+    y: Math.min(0.995, Math.max(0.005, (event.clientY - frameRect.top - correctionPreviewRect.top) / correctionPreviewRect.height)),
+  };
+  const nextQuad = correctionRecipe.quad.map((current, index) => (
+    index === activeCornerDrag.index ? point : current
+  ));
+  if (isConvexQuad(nextQuad)) {
+    correctionRecipe = { ...correctionRecipe, quad: nextQuad };
+    scheduleCorrectionUi();
+  }
+  event.preventDefault();
+}
+
+function endCornerDrag(event) {
+  if (!activeCornerDrag || activeCornerDrag.pointerId !== event.pointerId) return;
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  activeCornerDrag = null;
+}
+
+function openCorrection() {
+  if (!currentWorkingBlob) return;
+  correctionRecipe = createCorrectionRecipe();
+  elements.straightenControl.value = "0";
+  elements.verticalPerspectiveControl.value = "0";
+  elements.horizontalPerspectiveControl.value = "0";
+  showView(elements.correctionView);
+  window.requestAnimationFrame(() => {
+    drawCorrectionSource();
+    renderCorrectionUi();
+  });
+}
+
+function cancelCorrection() {
+  showOriginalCorrectionPreview();
+  showView(elements.editorView);
+  window.requestAnimationFrame(updateImageCanvasSize);
+}
+
+function showOriginalCorrectionPreview() {
+  elements.correctionCanvas.hidden = false;
+  elements.correctionResultCanvas.hidden = true;
+  elements.correctionHandles.hidden = false;
+  elements.correctionCompareButton.textContent = "按住预览校正";
+}
+
+function showCorrectedCorrectionPreview(event) {
+  if (!isConvexQuad(effectiveQuad(correctionRecipe))) return;
+  const size = correctionOutputSize(
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+    correctionRecipe,
+    1400,
+  );
+  const renderer = renderCorrectionToCanvas(
+    elements.sourceImage,
+    correctionRecipe,
+    elements.correctionResultCanvas,
+    size,
+  );
+  if (renderer !== "webgl" && requiresProjectiveCorrection(
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+    correctionRecipe,
+  )) {
+    elements.correctionRendererNote.textContent = "当前设备只能执行矩形裁剪，无法可靠预览四角或透视校正。";
+    notifyUser("当前浏览器无法预览透视校正", "仍可还原四角和透视滑杆后执行普通矩形裁剪。");
+    return;
+  }
+  elements.correctionRendererNote.textContent = renderer === "webgl"
+    ? "透视预览由本机 GPU 生成；图片不会上传。应用后参考线会重置。"
+    : "当前设备仅支持矩形裁剪；四角和透视校正需要较新的浏览器。";
+  elements.correctionCanvas.hidden = true;
+  elements.correctionResultCanvas.hidden = false;
+  elements.correctionHandles.hidden = true;
+  elements.correctionCompareButton.textContent = "松开回到四角";
+  elements.correctionCompareButton.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+
+async function applyCorrection() {
+  if (!isConvexQuad(effectiveQuad(correctionRecipe))) {
+    notifyUser("四个角点没有形成有效区域", "请让四个角按左上、右上、右下、左下依次围住卡片。");
+    return;
+  }
+  setCorrectionBusy(true);
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+  try {
+    const size = correctionOutputSize(
+      elements.sourceImage.naturalWidth,
+      elements.sourceImage.naturalHeight,
+      correctionRecipe,
+      MAX_WORKING_EDGE,
+    );
+    const canvas = elements.correctionResultCanvas;
+    const renderer = renderCorrectionToCanvas(elements.sourceImage, correctionRecipe, canvas, size);
+    if (renderer !== "webgl" && requiresProjectiveCorrection(
+      elements.sourceImage.naturalWidth,
+      elements.sourceImage.naturalHeight,
+      correctionRecipe,
+    )) {
+      throw new Error("当前浏览器不支持透视校正");
+    }
+    const correctedBlob = await canvasToBlob(canvas, "image/jpeg", 0.94);
+    await displayWorkingImage(correctedBlob);
+    guides = { ...DEFAULT_GUIDES };
+    renderGuides();
+    updateResults();
+    showView(elements.editorView);
+    window.requestAnimationFrame(() => {
+      updateImageCanvasSize();
+      resetView();
+      notifyUser("图片校正已应用", "参考线已重置，请重新对齐卡片边框。");
+    });
+  } catch (error) {
+    notifyUser("无法应用图片校正", error?.message || "请还原透视滑杆后重试。");
+  } finally {
+    setCorrectionBusy(false);
+  }
 }
 
 function requestImage() {
@@ -735,9 +1083,13 @@ elements.chooseImageButton.addEventListener("click", requestImage);
 elements.changeImageButton.addEventListener("click", requestImage);
 elements.processingChangeButton.addEventListener("click", requestImage);
 elements.takePhotoButton.addEventListener("click", () => elements.cameraInput.click());
+elements.pasteImageButton.addEventListener("click", pasteImageFromButton);
 elements.fileInput.addEventListener("change", handleFileInput);
 elements.cameraInput.addEventListener("change", handleFileInput);
+elements.correctImageButton.addEventListener("click", openCorrection);
 elements.resetGuidesButton.addEventListener("click", resetGuides);
+elements.psaFrontButton.addEventListener("click", () => setPsaSide("front"));
+elements.psaBackButton.addEventListener("click", () => setPsaSide("back"));
 elements.zoomOutButton.addEventListener("click", () => zoomAtCenter(viewState.zoom - VIEW_ZOOM_STEP));
 elements.zoomResetButton.addEventListener("click", resetView);
 elements.zoomInButton.addEventListener("click", () => zoomAtCenter(viewState.zoom + VIEW_ZOOM_STEP));
@@ -748,6 +1100,33 @@ elements.measurementFrame.addEventListener("pointercancel", endImageGesture);
 elements.measurementFrame.addEventListener("wheel", handleImageWheel, { passive: false });
 elements.measurementFrame.addEventListener("dblclick", handleImageDoubleClick);
 elements.measurementFrame.addEventListener("keydown", handleImageKeydown);
+elements.correctionResetButton.addEventListener("click", resetCorrection);
+elements.correctionCancelButton.addEventListener("click", cancelCorrection);
+elements.correctionCancelButtonBottom.addEventListener("click", cancelCorrection);
+elements.correctionApplyButton.addEventListener("click", applyCorrection);
+elements.correctionApplyButtonBottom.addEventListener("click", applyCorrection);
+elements.correctionCompareButton.addEventListener("pointerdown", showCorrectedCorrectionPreview);
+elements.correctionCompareButton.addEventListener("pointerup", showOriginalCorrectionPreview);
+elements.correctionCompareButton.addEventListener("pointercancel", showOriginalCorrectionPreview);
+elements.correctionCompareButton.addEventListener("lostpointercapture", showOriginalCorrectionPreview);
+elements.aspectControl.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-aspect]");
+  if (!button) return;
+  correctionRecipe = { ...correctionRecipe, aspect: button.dataset.aspect };
+  scheduleCorrectionUi();
+});
+elements.straightenControl.addEventListener("input", (event) => {
+  correctionRecipe = { ...correctionRecipe, straighten: Number(event.target.value) };
+  scheduleCorrectionUi();
+});
+elements.verticalPerspectiveControl.addEventListener("input", (event) => {
+  correctionRecipe = { ...correctionRecipe, verticalPerspective: Number(event.target.value) };
+  scheduleCorrectionUi();
+});
+elements.horizontalPerspectiveControl.addEventListener("input", (event) => {
+  correctionRecipe = { ...correctionRecipe, horizontalPerspective: Number(event.target.value) };
+  scheduleCorrectionUi();
+});
 
 elements.dropZone.addEventListener("dragenter", (event) => {
   event.preventDefault();
@@ -771,14 +1150,24 @@ elements.dropZone.addEventListener("drop", (event) => {
 
 window.addEventListener("beforeunload", () => {
   clearProcessingTimers();
+  if (correctionRenderFrame !== null) window.cancelAnimationFrame(correctionRenderFrame);
   if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
 });
+window.addEventListener("paste", handlePaste);
 
 if ("ResizeObserver" in window) {
-  new ResizeObserver(() => setView(viewState)).observe(elements.measurementFrame);
+  const measurementResizeObserver = new ResizeObserver(updateImageCanvasSize);
+  measurementResizeObserver.observe(elements.measurementFrame);
+  const correctionResizeObserver = new ResizeObserver(() => {
+    if (document.body.dataset.view !== "correction-view") return;
+    drawCorrectionSource();
+    renderCorrectionUi();
+  });
+  correctionResizeObserver.observe(elements.correctionFrame);
 }
 
 mountGuides();
+mountCorrectionHandles();
 renderGuides();
 updateResults();
 renderView();

@@ -6,7 +6,7 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputDirectory = join(projectRoot, "dist");
 const metadataMarker = "    <!-- build:site-metadata -->";
 const siteDescription =
-  "CENTERLINE 是免费的卡牌居中测量器。上传球星卡或收藏卡图片，拖动八条参考线，即时计算左右与上下居中比例；图片只在浏览器本地处理。";
+  "CENTERLINE 可在浏览器本地裁剪和拉正卡牌图片，用八条参考线测量左右与上下居中比例，并实时给出 PSA 居中等级上限。";
 const authorUrl = "https://sny.is/";
 const publicFiles = [
   "styles.css",
@@ -23,6 +23,7 @@ const publicFiles = [
   "src/app.js",
   "src/image.js",
   "src/measurement.js",
+  "src/perspective.js",
   "src/viewport.js",
 ];
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL);
@@ -75,7 +76,7 @@ function createStructuredData(siteUrl, imageUrl) {
         "@type": "WebPage",
         "@id": pageId,
         url: siteUrl.href,
-        name: "CENTERLINE 卡牌居中测量器",
+        name: "CENTERLINE 卡牌居中测量与图片校正",
         description: siteDescription,
         inLanguage: "zh-CN",
         isPartOf: { "@id": siteId },
@@ -92,6 +93,7 @@ function createStructuredData(siteUrl, imageUrl) {
           "球星卡居中",
           "收藏卡居中比例",
           "卡牌边框测量",
+          "Edgegrading without ads",
         ],
       },
       {

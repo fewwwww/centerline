@@ -44,6 +44,8 @@ const BLOCKED_EXTENSIONS = new Set([
 // UTIF expands the whole frame into RGBA memory before it can be downscaled.
 // Keep the fallback below a standard mobile browser's practical memory ceiling.
 const MAX_TIFF_PIXELS = 16 * 1024 * 1024;
+export const MAX_WORKING_EDGE = 4096;
+export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const scriptLoads = new WeakMap();
 
 function getExtension(fileName = "") {
@@ -72,6 +74,22 @@ export function isSupportedImageFile(file) {
 
   if (BLOCKED_TYPES.has(type) || BLOCKED_EXTENSIONS.has(extension)) return false;
   return SUPPORTED_TYPES.has(type) || SUPPORTED_EXTENSIONS.has(extension);
+}
+
+export function validateImageFile(file, maximumBytes = MAX_IMAGE_BYTES) {
+  if (!isSupportedImageFile(file)) {
+    return {
+      title: "暂不支持这个文件",
+      detail: "请选择 JPG、PNG、WebP、HEIC、AVIF、GIF、BMP 或 TIFF 图片。",
+    };
+  }
+  if (file.size > maximumBytes) {
+    return {
+      title: "图片超过 25MB",
+      detail: "请压缩图片后重试，或选择一张更小的图片。",
+    };
+  }
+  return null;
 }
 
 function loadGlobalScript({ documentRef, globalRef, url, integrity, resolveGlobal, errorMessage }) {
@@ -198,4 +216,133 @@ export async function decodeTiffToRgba(file, environment) {
     height: primary.height,
     data: new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength),
   };
+}
+
+async function loadImageElement(blob) {
+  const objectUrl = URL.createObjectURL(blob);
+  const image = new Image();
+  image.decoding = "async";
+  image.src = objectUrl;
+  try {
+    await image.decode();
+    return { image, objectUrl };
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
+}
+
+async function decodeSource(file) {
+  if ("createImageBitmap" in globalThis) {
+    try {
+      return await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      // Safari and optional codecs can still decode through HTMLImageElement.
+    }
+  }
+  const { image, objectUrl } = await loadImageElement(file);
+  image.releaseObjectUrl = () => URL.revokeObjectURL(objectUrl);
+  return image;
+}
+
+function sourceDimensions(source) {
+  return {
+    width: source.naturalWidth || source.width,
+    height: source.naturalHeight || source.height,
+  };
+}
+
+function releaseDecodedSource(source) {
+  if (typeof source.close === "function") source.close();
+  if (typeof source.releaseObjectUrl === "function") source.releaseObjectUrl();
+}
+
+export function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Could not create working image"));
+    }, type, quality);
+  });
+}
+
+async function decodedSourceToBlob(source, outputType, quality, maximumEdge) {
+  const { width, height } = sourceDimensions(source);
+  if (!width || !height) {
+    releaseDecodedSource(source);
+    throw new Error("Image has no dimensions");
+  }
+  const scale = maximumEdge / Math.max(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * Math.min(1, scale));
+  canvas.height = Math.round(height * Math.min(1, scale));
+  const context = canvas.getContext("2d", { alpha: outputType === "image/png" });
+  if (!context) {
+    releaseDecodedSource(source);
+    throw new Error("Canvas is unavailable");
+  }
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  try {
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return await canvasToBlob(canvas, outputType, quality);
+  } finally {
+    releaseDecodedSource(source);
+  }
+}
+
+async function normalizeWorkingImage(file, maximumEdge) {
+  const source = await decodeSource(file);
+  const { width, height } = sourceDimensions(source);
+  if (!width || !height) {
+    releaseDecodedSource(source);
+    throw new Error("Image has no dimensions");
+  }
+  if (Math.max(width, height) <= maximumEdge) {
+    releaseDecodedSource(source);
+    return file;
+  }
+  return decodedSourceToBlob(
+    source,
+    file.type === "image/png" ? "image/png" : "image/jpeg",
+    0.92,
+    maximumEdge,
+  );
+}
+
+async function tryDecodeSource(file) {
+  try {
+    return await decodeSource(file);
+  } catch {
+    return null;
+  }
+}
+
+async function tiffToPngBlob(file, maximumEdge) {
+  const { width, height, data } = await decodeTiffToRgba(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable");
+  context.putImageData(new ImageData(data, width, height), 0, 0);
+  if (Math.max(width, height) <= maximumEdge) return canvasToBlob(canvas, "image/png", 1);
+  return decodedSourceToBlob(canvas, "image/png", 1, maximumEdge);
+}
+
+export async function prepareWorkingImage(file, maximumEdge = MAX_WORKING_EDGE) {
+  if (isHeicFile(file)) {
+    const nativeSource = await tryDecodeSource(file);
+    if (nativeSource) return decodedSourceToBlob(nativeSource, "image/jpeg", 0.92, maximumEdge);
+    return normalizeWorkingImage(await convertHeicToJpeg(file), maximumEdge);
+  }
+  if (isTiffFile(file)) {
+    const nativeSource = await tryDecodeSource(file);
+    if (nativeSource) return decodedSourceToBlob(nativeSource, "image/png", 1, maximumEdge);
+    return tiffToPngBlob(file, maximumEdge);
+  }
+  if (isGifFile(file)) {
+    return decodedSourceToBlob(await decodeSource(file), "image/png", 1, maximumEdge);
+  }
+  return normalizeWorkingImage(file, maximumEdge);
 }

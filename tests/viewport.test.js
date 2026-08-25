@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   MAX_VIEW_ZOOM,
   clampViewState,
+  computeContainSize,
   guideScreenWidth,
   panView,
   pinchView,
@@ -18,10 +19,8 @@ test("viewport starts fitted and cannot pan until it is zoomed", () => {
 });
 
 test("panning a zoomed image stays inside the fitted image bounds", () => {
-  assert.deepEqual(
-    panView({ zoom: 2, panX: 0, panY: 0 }, 999, -999, 400, 600),
-    { zoom: 2, panX: 200, panY: -300 },
-  );
+  const state = panView({ zoom: 2, panX: 0, panY: 0 }, 999, -999, 400, 600, 300, 600);
+  assert.deepEqual(state, { zoom: 2, panX: 228, panY: -492 });
 });
 
 test("zooming around a point keeps that image point under the pointer", () => {
@@ -50,4 +49,21 @@ test("guide stroke becomes thinner on screen as zoom increases", () => {
   assert.equal(guideScreenWidth(1), 2);
   assert.equal(guideScreenWidth(4), 1);
   assert.equal(guideScreenWidth(6), 1);
+});
+
+test("contain sizing gives a portrait image the full viewport height", () => {
+  assert.deepEqual(computeContainSize(390, 600, 1000, 1500), { width: 390, height: 585 });
+  assert.deepEqual(computeContainSize(0, 600, 1000, 1500), { width: 0, height: 0 });
+});
+
+test("zoomed portrait content can move its edge into the central safe area", () => {
+  const state = clampViewState(
+    { zoom: 3, panX: 999, panY: 999 },
+    390,
+    600,
+    300,
+    600,
+  );
+  assert.ok(state.panX > 300, "horizontal pan is based on content, not the old small frame");
+  assert.ok(state.panY > 700, "vertical pan keeps only a safe-zone strip visible");
 });

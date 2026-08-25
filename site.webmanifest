@@ -1,7 +1,7 @@
 {
-  "name": "CENTERLINE 卡牌居中测量器",
+  "name": "CENTERLINE 卡牌居中测量与图片校正",
   "short_name": "CENTERLINE",
-  "description": "用八条参考线即时测量卡牌左右与上下居中比例，图片只在浏览器本地处理。",
+  "description": "本地裁剪和拉正卡牌图片，用八条参考线测量左右与上下居中比例及 PSA 居中等级上限。",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",

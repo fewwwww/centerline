@@ -13,6 +13,7 @@ import {
   isGifFile,
   isHeicFile,
   isSupportedImageFile,
+  validateImageFile,
   isTiffFile,
 } from "../src/image.js";
 
@@ -43,6 +44,18 @@ test("common raster formats are accepted while documents, vectors, and RAW files
   }
   assert.equal(isTiffFile({ name: "CARD.TIF", type: "" }), true);
   assert.equal(isGifFile({ name: "card.bin", type: "image/gif" }), true);
+});
+
+test("file validation rejects unsupported and oversized files before decoding", () => {
+  assert.equal(validateImageFile({ name: "card.webp", type: "image/webp", size: 1024 }), null);
+  assert.equal(
+    validateImageFile({ name: "card.webp", type: "image/webp", size: 26 * 1024 * 1024 }).title,
+    "图片超过 25MB",
+  );
+  assert.equal(
+    validateImageFile({ name: "card.pdf", type: "application/pdf", size: 1024 }).title,
+    "暂不支持这个文件",
+  );
 });
 
 test("HEIC conversion lazy-loads the pinned converter and returns JPEG", async () => {

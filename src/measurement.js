@@ -107,3 +107,52 @@ export function formatRatio(axisResult) {
 
   return `${axisResult.first} / ${axisResult.second}`;
 }
+
+const PSA_FRONT_THRESHOLDS = Object.freeze([
+  { maximum: 55, label: "PSA 10", grade: 10 },
+  { maximum: 60, label: "PSA 9", grade: 9 },
+  { maximum: 65, label: "PSA 8", grade: 8 },
+  { maximum: 70, label: "PSA 7", grade: 7 },
+]);
+
+const PSA_BACK_THRESHOLDS = Object.freeze([
+  { maximum: 75, label: "PSA 10", grade: 10 },
+  { maximum: 90, label: "PSA 9", grade: 9 },
+]);
+
+function axisWorst(axisResult) {
+  return axisResult.valid ? Math.max(axisResult.first, axisResult.second) : null;
+}
+
+export function estimatePsaCentering(measurements, side = "front") {
+  const horizontalWorst = axisWorst(measurements.horizontal);
+  const verticalWorst = axisWorst(measurements.vertical);
+
+  if (horizontalWorst === null || verticalWorst === null) {
+    return {
+      valid: false,
+      label: "—",
+      grade: null,
+      determiningAxis: null,
+      worst: null,
+    };
+  }
+
+  const worst = Math.max(horizontalWorst, verticalWorst);
+  const determiningAxis = horizontalWorst === verticalWorst
+    ? "左右与上下"
+    : horizontalWorst > verticalWorst ? "左右" : "上下";
+  const thresholds = side === "back" ? PSA_BACK_THRESHOLDS : PSA_FRONT_THRESHOLDS;
+  const match = thresholds.find(({ maximum }) => worst <= maximum);
+
+  return {
+    valid: true,
+    label: match?.label || "PSA 6 或以下",
+    grade: match?.grade ?? 6,
+    determiningAxis,
+    horizontalWorst,
+    verticalWorst,
+    worst,
+    side: side === "back" ? "back" : "front",
+  };
+}

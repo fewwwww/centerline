@@ -6,6 +6,7 @@ import {
   calculateAxis,
   calculateMeasurements,
   constrainGuide,
+  estimatePsaCentering,
   formatRatio,
   moveGuide,
 } from "../src/measurement.js";
@@ -63,4 +64,50 @@ test("normalizing the same geometry to another display size keeps its ratio", ()
   const renderedPixels = calculateAxis(0.12 * 390, 0.08 * 390);
   assert.equal(formatRatio(normalized), "60 / 40");
   assert.equal(formatRatio(renderedPixels), "60 / 40");
+});
+
+test("PSA front estimate uses the worse displayed axis and exact boundaries", () => {
+  const cases = [
+    [55, 10],
+    [56, 9],
+    [60, 9],
+    [61, 8],
+    [65, 8],
+    [66, 7],
+    [70, 7],
+    [71, 6],
+  ];
+
+  cases.forEach(([worst, grade]) => {
+    const result = estimatePsaCentering({
+      horizontal: { valid: true, first: worst, second: 100 - worst },
+      vertical: { valid: true, first: 50, second: 50 },
+    });
+    assert.equal(result.grade, grade);
+    assert.equal(result.determiningAxis, "左右");
+  });
+});
+
+test("PSA estimate treats direction equally and supports documented back thresholds", () => {
+  const front = estimatePsaCentering({
+    horizontal: { valid: true, first: 35, second: 65 },
+    vertical: { valid: true, first: 65, second: 35 },
+  });
+  assert.equal(front.label, "PSA 8");
+  assert.equal(front.determiningAxis, "左右与上下");
+
+  const back = estimatePsaCentering({
+    horizontal: { valid: true, first: 76, second: 24 },
+    vertical: { valid: true, first: 50, second: 50 },
+  }, "back");
+  assert.equal(back.label, "PSA 9");
+});
+
+test("PSA estimate never keeps a grade when either axis is invalid", () => {
+  const result = estimatePsaCentering({
+    horizontal: { valid: false, first: null, second: null },
+    vertical: { valid: true, first: 50, second: 50 },
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.label, "—");
 });
