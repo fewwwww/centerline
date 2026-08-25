@@ -80,6 +80,11 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /卡牌居中比例/);
   assert.match(html, /卡牌居中 · 手动测量/);
   assert.match(html, /左右 \/ 上下比例/);
+  assert.match(html, /id="correction-loupe"[\s\S]*id="correction-loupe-canvas"/);
+  assert.ok(
+    html.indexOf('id="correction-compare-button"') > html.indexOf('<aside class="correction-panel"'),
+    "correction compare button must stay in the control panel instead of covering a corner handle",
+  );
   assert.doesNotMatch(html, /无广告|简洁替代|比较定位/);
   assert.doesNotMatch(html, /name="keywords"/);
   assert.doesNotMatch(html, /(?:href|src)="\/(?!\/)/);

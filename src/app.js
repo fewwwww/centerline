@@ -18,11 +18,15 @@ import {
   MAX_VIEW_ZOOM,
   MIN_VIEW_ZOOM,
   VIEW_ZOOM_STEP,
+  CORRECTION_LOUPE_MAGNIFICATION,
+  CORRECTION_LOUPE_SIZE,
   clampViewState,
   computeContainSize,
+  correctionLoupeSourceRect,
   guideScreenWidth,
   panView,
   pinchView,
+  positionCorrectionLoupe,
   zoomViewAt,
 } from "./viewport.js";
 import {
@@ -90,6 +94,9 @@ const elements = {
   correctionCanvas: document.querySelector("#correction-canvas"),
   correctionResultCanvas: document.querySelector("#correction-result-canvas"),
   correctionHandles: document.querySelector("#correction-handles"),
+  correctionLoupe: document.querySelector("#correction-loupe"),
+  correctionLoupeCanvas: document.querySelector("#correction-loupe-canvas"),
+  correctionLoupeLabel: document.querySelector("#correction-loupe-label"),
   correctionCompareButton: document.querySelector("#correction-compare-button"),
   correctionResetButton: document.querySelector("#correction-reset-button"),
   correctionCancelButton: document.querySelector("#correction-cancel-button"),
@@ -784,6 +791,7 @@ let correctionOverlaySvg = null;
 let correctionOutline = null;
 let correctionGridLines = [];
 let correctionHandleButtons = [];
+const CORNER_LABELS = ["左上角", "右上角", "右下角", "左下角"];
 
 function mountCorrectionHandles() {
   correctionOverlaySvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -930,9 +938,72 @@ function resetCorrection() {
   scheduleCorrectionUi();
 }
 
+function hideCorrectionLoupe() {
+  elements.correctionLoupe.hidden = true;
+  correctionHandleButtons.forEach((button) => button.classList.remove("is-dragging"));
+}
+
+function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex) {
+  const sourceWidth = elements.sourceImage.naturalWidth;
+  const sourceHeight = elements.sourceImage.naturalHeight;
+  const sourceRect = correctionLoupeSourceRect(
+    point,
+    sourceWidth,
+    sourceHeight,
+    correctionPreviewRect.width,
+    correctionPreviewRect.height,
+  );
+  if (!sourceRect) return;
+
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  const canvas = elements.correctionLoupeCanvas;
+  const context = canvas.getContext("2d", { alpha: false });
+  const canvasSize = Math.round(CORRECTION_LOUPE_SIZE * pixelRatio);
+  if (canvas.width !== canvasSize || canvas.height !== canvasSize) {
+    canvas.width = canvasSize;
+    canvas.height = canvasSize;
+  }
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.fillStyle = "#0b0e0b";
+  context.fillRect(0, 0, CORRECTION_LOUPE_SIZE, CORRECTION_LOUPE_SIZE);
+
+  const sourceLeft = Math.max(0, sourceRect.x);
+  const sourceTop = Math.max(0, sourceRect.y);
+  const sourceRight = Math.min(sourceWidth, sourceRect.x + sourceRect.width);
+  const sourceBottom = Math.min(sourceHeight, sourceRect.y + sourceRect.height);
+  if (sourceRight > sourceLeft && sourceBottom > sourceTop) {
+    const scale = CORRECTION_LOUPE_SIZE / sourceRect.width;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      elements.sourceImage,
+      sourceLeft,
+      sourceTop,
+      sourceRight - sourceLeft,
+      sourceBottom - sourceTop,
+      (sourceLeft - sourceRect.x) * scale,
+      (sourceTop - sourceRect.y) * scale,
+      (sourceRight - sourceLeft) * scale,
+      (sourceBottom - sourceTop) * scale,
+    );
+  }
+
+  const position = positionCorrectionLoupe(
+    pointerX,
+    pointerY,
+    elements.correctionFrame.clientWidth,
+    elements.correctionFrame.clientHeight,
+  );
+  elements.correctionLoupe.style.left = `${position.left}px`;
+  elements.correctionLoupe.style.top = `${position.top}px`;
+  elements.correctionLoupeLabel.textContent = `${CORNER_LABELS[cornerIndex]} · ${CORRECTION_LOUPE_MAGNIFICATION}×`;
+  elements.correctionLoupe.hidden = false;
+}
+
 function beginCornerDrag(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
   activeCornerDrag = { pointerId: event.pointerId, index: Number(event.currentTarget.dataset.corner) };
+  event.currentTarget.classList.add("is-dragging");
   event.currentTarget.setPointerCapture(event.pointerId);
   moveCornerDrag(event);
   event.preventDefault();
@@ -941,16 +1012,26 @@ function beginCornerDrag(event) {
 function moveCornerDrag(event) {
   if (!activeCornerDrag || activeCornerDrag.pointerId !== event.pointerId) return;
   const frameRect = elements.correctionFrame.getBoundingClientRect();
+  const pointerX = event.clientX - frameRect.left;
+  const pointerY = event.clientY - frameRect.top;
   const point = {
-    x: Math.min(0.995, Math.max(0.005, (event.clientX - frameRect.left - correctionPreviewRect.left) / correctionPreviewRect.width)),
-    y: Math.min(0.995, Math.max(0.005, (event.clientY - frameRect.top - correctionPreviewRect.top) / correctionPreviewRect.height)),
+    x: Math.min(0.995, Math.max(0.005, (pointerX - correctionPreviewRect.left) / correctionPreviewRect.width)),
+    y: Math.min(0.995, Math.max(0.005, (pointerY - correctionPreviewRect.top) / correctionPreviewRect.height)),
   };
   const nextQuad = correctionRecipe.quad.map((current, index) => (
     index === activeCornerDrag.index ? point : current
   ));
   if (isConvexQuad(nextQuad)) {
+    drawCorrectionLoupe(point, pointerX, pointerY, activeCornerDrag.index);
     correctionRecipe = { ...correctionRecipe, quad: nextQuad };
     scheduleCorrectionUi();
+  } else {
+    drawCorrectionLoupe(
+      correctionRecipe.quad[activeCornerDrag.index],
+      pointerX,
+      pointerY,
+      activeCornerDrag.index,
+    );
   }
   event.preventDefault();
 }
@@ -960,11 +1041,14 @@ function endCornerDrag(event) {
   if (event.currentTarget.hasPointerCapture(event.pointerId)) {
     event.currentTarget.releasePointerCapture(event.pointerId);
   }
+  event.currentTarget.classList.remove("is-dragging");
   activeCornerDrag = null;
+  hideCorrectionLoupe();
 }
 
 function openCorrection() {
   if (!currentWorkingBlob) return;
+  hideCorrectionLoupe();
   correctionRecipe = createCorrectionRecipe();
   elements.straightenControl.value = "0";
   elements.verticalPerspectiveControl.value = "0";
@@ -977,6 +1061,7 @@ function openCorrection() {
 }
 
 function cancelCorrection() {
+  hideCorrectionLoupe();
   showOriginalCorrectionPreview();
   showView(elements.editorView);
   window.requestAnimationFrame(updateImageCanvasSize);

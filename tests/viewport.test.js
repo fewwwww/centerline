@@ -3,11 +3,14 @@ import test from "node:test";
 
 import {
   MAX_VIEW_ZOOM,
+  CORRECTION_LOUPE_SIZE,
   clampViewState,
   computeContainSize,
+  correctionLoupeSourceRect,
   guideScreenWidth,
   panView,
   pinchView,
+  positionCorrectionLoupe,
   zoomViewAt,
 } from "../src/viewport.js";
 
@@ -66,4 +69,27 @@ test("zoomed portrait content can move its edge into the central safe area", () 
   );
   assert.ok(state.panX > 300, "horizontal pan is based on content, not the old small frame");
   assert.ok(state.panY > 700, "vertical pan keeps only a safe-zone strip visible");
+});
+
+test("correction loupe stays away from the finger and switches sides near edges", () => {
+  assert.deepEqual(positionCorrectionLoupe(195, 300, 390, 600), { left: 137, top: 142 });
+  assert.deepEqual(positionCorrectionLoupe(20, 300, 390, 600), { left: 62, top: 142 });
+  assert.deepEqual(positionCorrectionLoupe(370, 300, 390, 600), { left: 212, top: 142 });
+  assert.deepEqual(positionCorrectionLoupe(195, 30, 390, 600), { left: 137, top: 72 });
+  assert.equal(CORRECTION_LOUPE_SIZE, 116);
+});
+
+test("correction loupe samples a magnified square centered on the dragged point", () => {
+  const rect = correctionLoupeSourceRect(
+    { x: 0.25, y: 0.75 },
+    1000,
+    1500,
+    300,
+    450,
+  );
+  assert.ok(Math.abs(rect.width - 148.7179) < 0.001);
+  assert.equal(rect.width, rect.height);
+  assert.ok(Math.abs((rect.x + (rect.width / 2)) - 250) < 1e-9);
+  assert.ok(Math.abs((rect.y + (rect.height / 2)) - 1125) < 1e-9);
+  assert.equal(correctionLoupeSourceRect({ x: 0.5, y: 0.5 }, 1000, 1500, 0, 450), null);
 });

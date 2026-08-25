@@ -1,6 +1,8 @@
 export const MIN_VIEW_ZOOM = 1;
 export const MAX_VIEW_ZOOM = 6;
 export const VIEW_ZOOM_STEP = 0.25;
+export const CORRECTION_LOUPE_SIZE = 116;
+export const CORRECTION_LOUPE_MAGNIFICATION = 2.6;
 
 export function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -106,4 +108,46 @@ export function pinchView(
 
 export function guideScreenWidth(zoom) {
   return Math.max(1, 2 / Math.sqrt(clamp(zoom, MIN_VIEW_ZOOM, MAX_VIEW_ZOOM)));
+}
+
+export function positionCorrectionLoupe(
+  pointerX,
+  pointerY,
+  frameWidth,
+  frameHeight,
+  size = CORRECTION_LOUPE_SIZE,
+) {
+  const margin = 10;
+  const fingerGap = 42;
+  let left = pointerX - (size / 2);
+  let top = pointerY - size - fingerGap;
+
+  if (top < margin) top = pointerY + fingerGap;
+  if (left < margin) left = pointerX + fingerGap;
+  if (left + size > frameWidth - margin) left = pointerX - size - fingerGap;
+
+  return {
+    left: clamp(left, margin, Math.max(margin, frameWidth - size - margin)),
+    top: clamp(top, margin, Math.max(margin, frameHeight - size - margin)),
+  };
+}
+
+export function correctionLoupeSourceRect(
+  point,
+  sourceWidth,
+  sourceHeight,
+  previewWidth,
+  previewHeight,
+  size = CORRECTION_LOUPE_SIZE,
+  magnification = CORRECTION_LOUPE_MAGNIFICATION,
+) {
+  const displayScale = Math.min(previewWidth / sourceWidth, previewHeight / sourceHeight);
+  if (!(displayScale > 0) || !(magnification > 0)) return null;
+  const sourceSpan = size / (displayScale * magnification);
+  return {
+    x: (point.x * sourceWidth) - (sourceSpan / 2),
+    y: (point.y * sourceHeight) - (sourceSpan / 2),
+    width: sourceSpan,
+    height: sourceSpan,
+  };
 }

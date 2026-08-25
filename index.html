@@ -172,7 +172,10 @@
                 <canvas id="correction-canvas" aria-label="图片裁剪与透视校正预览"></canvas>
                 <canvas id="correction-result-canvas" aria-label="校正后的效果预览" hidden></canvas>
                 <div class="correction-handles" id="correction-handles" aria-label="裁剪角点"></div>
-                <button class="compare-button" id="correction-compare-button" type="button">按住预览校正</button>
+                <div class="correction-loupe" id="correction-loupe" aria-hidden="true" hidden>
+                  <canvas id="correction-loupe-canvas"></canvas>
+                  <span id="correction-loupe-label">左上角</span>
+                </div>
               </div>
             </div>
 
@@ -181,6 +184,8 @@
                 <strong id="geometry-advice-title">四角对准后：拍摄角度良好，可直接测量</strong>
                 <span>只判断拍摄透视，不代表卡片物理平整度。</span>
               </div>
+
+              <button class="compare-button" id="correction-compare-button" type="button">按住预览校正</button>
 
               <fieldset class="aspect-controls">
                 <legend>裁剪比例</legend>
