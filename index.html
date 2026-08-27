@@ -24,7 +24,7 @@
     <meta property="og:title" content="CENTERLINE｜卡牌居中测量与图片校正" />
     <meta
       property="og:description"
-      content="上传或粘贴卡牌图片，本地裁剪、拉直和校正透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
+      content="上传或粘贴卡牌图片，本地拖动四角裁剪并校正拍摄透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
     />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1731" />
@@ -34,7 +34,7 @@
     <meta name="twitter:title" content="CENTERLINE｜卡牌居中测量与图片校正" />
     <meta
       name="twitter:description"
-      content="上传或粘贴卡牌图片，本地裁剪、拉直和校正透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
+      content="上传或粘贴卡牌图片，本地拖动四角裁剪并校正拍摄透视，再用八条参考线测量居中比例与 PSA 居中等级上限。"
     />
     <meta name="twitter:image:alt" content="CENTERLINE 卡牌居中测量器界面预览" />
     <!-- build:site-metadata -->
@@ -95,15 +95,40 @@
               hidden
             />
 
-            <div class="upload-illustration" aria-hidden="true">
-              <div class="sample-card">
-                <span class="sample-line sample-line-left"></span>
-                <span class="sample-line sample-line-right"></span>
-                <span class="sample-line sample-line-top"></span>
-                <span class="sample-line sample-line-bottom"></span>
-                <div class="sample-ball"></div>
-                <div class="sample-copy"></div>
-                <div class="sample-copy short"></div>
+            <div class="measurement-example" aria-labelledby="measurement-example-title">
+              <figure class="example-photo">
+                <img
+                  src="./assets/measurement-example-mantle.jpg"
+                  alt="1952 Topps Mickey Mantle 卡牌居中测量示例"
+                  width="480"
+                  height="800"
+                  decoding="async"
+                  fetchpriority="high"
+                />
+                <span class="example-guide example-guide-vertical example-outer-left" aria-hidden="true"><i>外</i></span>
+                <span class="example-guide example-guide-vertical example-inner-left" aria-hidden="true"><i>内</i></span>
+                <span class="example-guide example-guide-vertical example-inner-right" aria-hidden="true"><i>内</i></span>
+                <span class="example-guide example-guide-vertical example-outer-right" aria-hidden="true"><i>外</i></span>
+                <span class="example-guide example-guide-horizontal example-outer-top" aria-hidden="true"><i>外</i></span>
+                <span class="example-guide example-guide-horizontal example-inner-top" aria-hidden="true"><i>内</i></span>
+                <span class="example-guide example-guide-horizontal example-inner-bottom" aria-hidden="true"><i>内</i></span>
+                <span class="example-guide example-guide-horizontal example-outer-bottom" aria-hidden="true"><i>外</i></span>
+              </figure>
+
+              <div class="example-readout">
+                <p class="example-kicker">测量示例</p>
+                <h2 id="measurement-example-title">为什么它显示 PSA 10？</h2>
+                <div class="example-ratios" aria-label="示例居中比例">
+                  <div><span>左右</span><strong>50 / 50</strong></div>
+                  <div><span>上下</span><strong>46 / 54</strong></div>
+                </div>
+                <div class="example-grade">
+                  <span>居中上限</span>
+                  <strong>PSA 10</strong>
+                </div>
+                <p class="example-explanation">
+                  较偏一侧为 <b>54%</b>，仍在正面 PSA 10 的 <b>55%</b> 上限内。最终评级还取决于角、边和表面。
+                </p>
               </div>
             </div>
 
@@ -156,8 +181,8 @@
           <div class="correction-heading">
             <div>
               <p class="eyebrow">LOCAL PHOTO CORRECTION</p>
-              <h1 id="correction-title">裁剪并拉正卡片</h1>
-              <p>把四个角拖到卡片角点，再用拉直、上下透视和左右透视贴合辅助网格。</p>
+              <h1 id="correction-title">拖动四角裁剪卡片</h1>
+              <p>把四个角拖到卡片角点，工具会按选区裁剪并自动拉正拍摄透视。</p>
             </div>
             <div class="correction-actions correction-actions-top">
               <button class="button button-secondary compact" id="correction-reset-button" type="button">还原原图</button>
@@ -179,7 +204,7 @@
               </div>
             </div>
 
-            <aside class="correction-panel" aria-label="图片校正控制">
+            <aside class="correction-panel" aria-label="裁剪预览与操作">
               <div class="geometry-advice" id="geometry-advice" data-level="direct">
                 <strong id="geometry-advice-title">四角对准后：拍摄角度良好，可直接测量</strong>
                 <span>只判断拍摄透视，不代表卡片物理平整度。</span>
@@ -187,31 +212,7 @@
 
               <button class="compare-button" id="correction-compare-button" type="button">按住预览校正</button>
 
-              <fieldset class="aspect-controls">
-                <legend>裁剪比例</legend>
-                <div class="segmented-control" id="aspect-control">
-                  <button type="button" data-aspect="free" aria-pressed="true">自由</button>
-                  <button type="button" data-aspect="original" aria-pressed="false">原图</button>
-                  <button type="button" data-aspect="5:7" aria-pressed="false">5:7</button>
-                </div>
-              </fieldset>
-
-              <div class="correction-sliders">
-                <label>
-                  <span>拉直 <output id="straighten-value">0.0°</output></span>
-                  <input id="straighten-control" type="range" min="-15" max="15" step="0.1" value="0" />
-                </label>
-                <label>
-                  <span>上下透视 <output id="vertical-perspective-value">0</output></span>
-                  <input id="vertical-perspective-control" type="range" min="-100" max="100" step="1" value="0" />
-                </label>
-                <label>
-                  <span>左右透视 <output id="horizontal-perspective-value">0</output></span>
-                  <input id="horizontal-perspective-control" type="range" min="-100" max="100" step="1" value="0" />
-                </label>
-              </div>
-
-              <p class="correction-note" id="correction-renderer-note">网格和四角均在浏览器本地运算。应用校正后参考线会重置。</p>
+              <p class="correction-note" id="correction-renderer-note">拖动四角即可裁剪并自动拉正。所有运算均在浏览器本地完成。</p>
               <div class="correction-actions correction-actions-bottom">
                 <button class="button button-secondary" id="correction-reset-button-bottom" type="button">还原原图</button>
                 <button class="button button-secondary" id="correction-cancel-button-bottom" type="button">取消</button>
@@ -229,7 +230,7 @@
               <p>缩放并拖动图片查看边角，再把八条虚线分别对准卡片外沿和图案内沿。</p>
             </div>
             <div class="editor-actions">
-              <button class="button button-secondary compact" id="correct-image-button" type="button">裁剪 / 拉正</button>
+              <button class="button button-secondary compact" id="correct-image-button" type="button">四角裁剪</button>
               <button class="button button-secondary compact" id="reset-guides-button" type="button">
                 重置参考线
               </button>
@@ -315,6 +316,10 @@
                   <div class="image-canvas" id="image-canvas">
                     <img class="source-image" id="source-image" alt="待测量的卡牌图片" draggable="false" />
                     <div class="guide-layer" id="guide-layer"></div>
+                  </div>
+                  <div class="guide-loupe" id="guide-loupe" aria-hidden="true" hidden>
+                    <canvas id="guide-loupe-canvas"></canvas>
+                    <span id="guide-loupe-label">左外沿</span>
                   </div>
                 </div>
               </div>

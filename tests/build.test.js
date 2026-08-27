@@ -22,9 +22,11 @@ test("static build contains only deployable browser assets", async () => {
     "assets/favicon.svg",
     "assets/icon-192.png",
     "assets/icon-512.png",
+    "assets/measurement-example-mantle.jpg",
     "assets/og-card-centering.png",
     "assets/safari-pinned-tab.svg",
     "src/app.js",
+    "src/frame-scheduler.js",
     "src/image.js",
     "src/measurement.js",
     "src/perspective.js",
@@ -49,9 +51,11 @@ test("static build contains only deployable browser assets", async () => {
 });
 
 test("static metadata and GitHub Pages subpath-safe links stay explicit", async () => {
-  const [html, socialImage] = await Promise.all([
+  const [html, socialImage, measurementExample, styles] = await Promise.all([
     readFile(new URL("index.html", projectUrl), "utf8"),
     readFile(new URL("assets/og-card-centering.png", projectUrl)),
+    readFile(new URL("assets/measurement-example-mantle.jpg", projectUrl)),
+    readFile(new URL("styles.css", projectUrl), "utf8"),
   ]);
 
   assert.match(html, /<title>卡牌居中测量与图片校正 - CENTERLINE<\/title>/);
@@ -64,7 +68,7 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /property="og:title" content="CENTERLINE｜卡牌居中测量与图片校正"/);
   assert.match(
     html,
-    /property="og:description"[\s\S]*上传或粘贴卡牌图片，本地裁剪、拉直和校正透视/,
+    /property="og:description"[\s\S]*上传或粘贴卡牌图片，本地拖动四角裁剪并校正拍摄透视/,
   );
   assert.match(html, /property="og:site_name" content="CENTERLINE"/);
   assert.match(html, /property="og:locale" content="zh_CN"/);
@@ -80,7 +84,19 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /卡牌居中比例/);
   assert.match(html, /卡牌居中 · 手动测量/);
   assert.match(html, /左右 \/ 上下比例/);
+  assert.match(html, /id="measurement-example-title">为什么它显示 PSA 10？/);
+  assert.match(html, /较偏一侧为 <b>54%<\/b>，仍在正面 PSA 10 的 <b>55%<\/b> 上限内/);
+  assert.equal((html.match(/class="example-guide /g) || []).length, 8);
+  assert.ok(measurementExample.length < 160 * 1024, "homepage example image must stay lightweight");
+  assert.equal(
+    measurementExample.includes(Buffer.from("Exif\0\0", "binary")),
+    false,
+    "homepage example image must not ship EXIF metadata",
+  );
+  assert.match(html, /measurement-example-mantle\.jpg[\s\S]*fetchpriority="high"/);
   assert.match(html, /id="correction-loupe"[\s\S]*id="correction-loupe-canvas"/);
+  assert.doesNotMatch(html, /裁剪比例|data-aspect|straighten-control|vertical-perspective-control|horizontal-perspective-control/);
+  assert.doesNotMatch(styles, /\.aspect-controls|\.correction-sliders/);
   assert.ok(
     html.indexOf('id="correction-compare-button"') > html.indexOf('<aside class="correction-panel"'),
     "correction compare button must stay in the control panel instead of covering a corner handle",
@@ -133,7 +149,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       readFile(new URL("sitemap.xml", distUrl), "utf8"),
     ]);
 
-    assert.ok(stdout.includes(`Built 20 static files into dist for ${siteUrl}`));
+    assert.ok(stdout.includes(`Built 22 static files into dist for ${siteUrl}`));
     assert.ok(html.includes(`<link rel="canonical" href="${siteUrl}"`));
     assert.ok(html.includes(`<meta property="og:url" content="${siteUrl}"`));
     assert.ok(html.includes(
@@ -229,7 +245,7 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(styles, /border-left:\s*var\(--guide-line-width\) dashed var\(--guide-color\)/);
   assert.match(styles, /border-top:\s*var\(--guide-line-width\) dashed var\(--guide-color\)/);
   assert.match(styles, /scale\(var\(--canvas-zoom\)\)/);
-  assert.match(styles, /scale\(var\(--guide-inverse-zoom\)\)/);
+  assert.match(styles, /translate\(-50%, -50%\) scale\(var\(--guide-inverse-zoom\)\)/);
   assert.match(html, /id="zoom-out-button"/);
   assert.match(html, /id="zoom-reset-button"/);
   assert.match(html, /id="zoom-in-button"/);
@@ -237,6 +253,16 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.match(styles, /\.brand-credit a\s*\{[\s\S]*?text-decoration:\s*underline/);
   assert.match(perspective, /UNPACK_FLIP_Y_WEBGL, false/);
   assert.doesNotMatch(html, /实线/);
+});
+
+test("initial application path defers image decoding and correction code until needed", async () => {
+  const app = await readFile(new URL("src/app.js", projectUrl), "utf8");
+
+  assert.match(app, /import\("\.\/image\.js"\)/);
+  assert.match(app, /import\("\.\/perspective\.js"\)/);
+  assert.doesNotMatch(app, /from "\.\/image\.js"/);
+  assert.doesNotMatch(app, /from "\.\/perspective\.js"/);
+  assert.match(app, /createFrameScheduler/);
 });
 
 test("stacked editor keeps a usable image row at browser zoom widths", async () => {

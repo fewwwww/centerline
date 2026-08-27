@@ -7,17 +7,9 @@ import {
   moveGuide,
 } from "./measurement.js";
 import {
-  MAX_WORKING_EDGE,
-  beginImageCorrection,
-  canvasToBlob,
-  commitWorkingImage,
-  createImageSession,
-  isHeicFile,
-  isTiffFile,
-  prepareWorkingImage,
-  restoreOriginalCorrection,
-  validateImageFile,
-} from "./image.js";
+  createFrameScheduler,
+  createKeyedFrameScheduler,
+} from "./frame-scheduler.js";
 import {
   MAX_VIEW_ZOOM,
   MIN_VIEW_ZOOM,
@@ -29,6 +21,8 @@ import {
   computeMeasurementImageSize,
   correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
+  guideLoupePoint,
+  guideLoupeSegment,
   guideScreenWidth,
   pointerButtonsAreReleased,
   panView,
@@ -36,27 +30,23 @@ import {
   positionCorrectionLoupe,
   zoomViewAt,
 } from "./viewport.js";
-import {
-  assessCaptureGeometry,
-  correctionOutputSize,
-  correctionSampleQuad,
-  createCorrectionRecipe,
-  effectiveQuad,
-  isConvexQuad,
-  requiresProjectiveCorrection,
-  renderCorrectionToCanvas,
-} from "./perspective.js";
-
 const GUIDE_META = [
-  { key: "outerLeft", label: "左外沿", short: "外", direction: "left", kind: "outer", axis: "vertical", handle: "42%" },
-  { key: "innerLeft", label: "左内沿", short: "内", direction: "left", kind: "inner", axis: "vertical", handle: "58%" },
-  { key: "innerRight", label: "右内沿", short: "内", direction: "right", kind: "inner", axis: "vertical", handle: "58%" },
-  { key: "outerRight", label: "右外沿", short: "外", direction: "right", kind: "outer", axis: "vertical", handle: "42%" },
-  { key: "outerTop", label: "上外沿", short: "外", direction: "top", kind: "outer", axis: "horizontal", handle: "42%" },
-  { key: "innerTop", label: "上内沿", short: "内", direction: "top", kind: "inner", axis: "horizontal", handle: "58%" },
-  { key: "innerBottom", label: "下内沿", short: "内", direction: "bottom", kind: "inner", axis: "horizontal", handle: "58%" },
-  { key: "outerBottom", label: "下外沿", short: "外", direction: "bottom", kind: "outer", axis: "horizontal", handle: "42%" },
+  { key: "outerLeft", label: "左外沿", short: "外", direction: "left", kind: "outer", axis: "vertical", handle: 0.42 },
+  { key: "innerLeft", label: "左内沿", short: "内", direction: "left", kind: "inner", axis: "vertical", handle: 0.58 },
+  { key: "innerRight", label: "右内沿", short: "内", direction: "right", kind: "inner", axis: "vertical", handle: 0.58 },
+  { key: "outerRight", label: "右外沿", short: "外", direction: "right", kind: "outer", axis: "vertical", handle: 0.42 },
+  { key: "outerTop", label: "上外沿", short: "外", direction: "top", kind: "outer", axis: "horizontal", handle: 0.42 },
+  { key: "innerTop", label: "上内沿", short: "内", direction: "top", kind: "inner", axis: "horizontal", handle: 0.58 },
+  { key: "innerBottom", label: "下内沿", short: "内", direction: "bottom", kind: "inner", axis: "horizontal", handle: 0.58 },
+  { key: "outerBottom", label: "下外沿", short: "外", direction: "bottom", kind: "outer", axis: "horizontal", handle: 0.42 },
 ];
+const GUIDE_META_BY_KEY = new Map(GUIDE_META.map((meta) => [meta.key, meta]));
+const GUIDE_COLOR_PROPERTY = Object.freeze({
+  left: "--left",
+  right: "--right",
+  top: "--top",
+  bottom: "--bottom",
+});
 const ORIGINAL_RESTORE_QUAD = [
   { x: 0.005, y: 0.005 },
   { x: 0.995, y: 0.005 },
@@ -86,6 +76,9 @@ const elements = {
   measurementFrame: document.querySelector("#measurement-frame"),
   imageCanvas: document.querySelector("#image-canvas"),
   guideLayer: document.querySelector("#guide-layer"),
+  guideLoupe: document.querySelector("#guide-loupe"),
+  guideLoupeCanvas: document.querySelector("#guide-loupe-canvas"),
+  guideLoupeLabel: document.querySelector("#guide-loupe-label"),
   sourceImage: document.querySelector("#source-image"),
   zoomOutButton: document.querySelector("#zoom-out-button"),
   zoomResetButton: document.querySelector("#zoom-reset-button"),
@@ -117,13 +110,6 @@ const elements = {
   correctionCancelButtonBottom: document.querySelector("#correction-cancel-button-bottom"),
   correctionApplyButton: document.querySelector("#correction-apply-button"),
   correctionApplyButtonBottom: document.querySelector("#correction-apply-button-bottom"),
-  aspectControl: document.querySelector("#aspect-control"),
-  straightenControl: document.querySelector("#straighten-control"),
-  straightenValue: document.querySelector("#straighten-value"),
-  verticalPerspectiveControl: document.querySelector("#vertical-perspective-control"),
-  verticalPerspectiveValue: document.querySelector("#vertical-perspective-value"),
-  horizontalPerspectiveControl: document.querySelector("#horizontal-perspective-control"),
-  horizontalPerspectiveValue: document.querySelector("#horizontal-perspective-value"),
   geometryAdvice: document.querySelector("#geometry-advice"),
   geometryAdviceTitle: document.querySelector("#geometry-advice-title"),
   correctionRendererNote: document.querySelector("#correction-renderer-note"),
@@ -132,6 +118,7 @@ const elements = {
 
 let guides = { ...DEFAULT_GUIDES };
 let guideButtons = new Map();
+let guideColors = new Map();
 let activeDrag = null;
 let currentImageUrl = null;
 let imageSession = null;
@@ -143,10 +130,37 @@ const imagePointers = new Map();
 let panGesture = null;
 let pinchGesture = null;
 let psaSide = "front";
-let correctionRecipe = createCorrectionRecipe();
+let correctionRecipe = null;
 let correctionPreviewRect = { left: 0, top: 0, width: 0, height: 0 };
 let activeCornerDrag = null;
-let correctionRenderFrame = null;
+let imageToolsPromise = null;
+let correctionToolsPromise = null;
+let imageTools = null;
+let correctionTools = null;
+
+async function loadImageTools() {
+  if (imageTools) return imageTools;
+  imageToolsPromise ||= import("./image.js");
+  try {
+    imageTools = await imageToolsPromise;
+    return imageTools;
+  } catch (error) {
+    imageToolsPromise = null;
+    throw error;
+  }
+}
+
+async function loadCorrectionTools() {
+  if (correctionTools) return correctionTools;
+  correctionToolsPromise ||= import("./perspective.js");
+  try {
+    correctionTools = await correctionToolsPromise;
+    return correctionTools;
+  } catch (error) {
+    correctionToolsPromise = null;
+    throw error;
+  }
+}
 
 function showView(view) {
   [elements.uploadView, elements.processingView, elements.correctionView, elements.editorView].forEach((candidate) => {
@@ -273,14 +287,21 @@ async function displaySourceImage(blob) {
 async function displayWorkingImage(blob, startsNewSession = false) {
   await displaySourceImage(blob);
   imageSession = startsNewSession
-    ? createImageSession(blob)
-    : commitWorkingImage(imageSession, blob);
+    ? imageTools.createImageSession(blob)
+    : imageTools.commitWorkingImage(imageSession, blob);
 }
 
 async function handleFile(file, source = "file") {
   if (!file) return;
 
-  const validationError = validateImageFile(file);
+  try {
+    await loadImageTools();
+  } catch {
+    showUploadError("应用资源无法读取", "请刷新页面后重试；当前图片没有上传。");
+    return;
+  }
+
+  const validationError = imageTools.validateImageFile(file);
   if (validationError) {
     clearProcessingTimers();
     if (imageSession?.workingBlob && document.body.dataset.view !== "upload-view") {
@@ -302,7 +323,7 @@ async function handleFile(file, source = "file") {
   startProcessingState();
 
   try {
-    const workingImage = await prepareWorkingImage(file);
+    const workingImage = await imageTools.prepareWorkingImage(file);
     if (loadId !== imageLoadSequence) return;
 
     await displayWorkingImage(workingImage, true);
@@ -322,9 +343,9 @@ async function handleFile(file, source = "file") {
     if (loadId !== imageLoadSequence) return;
 
     clearProcessingTimers();
-    const errorMessage = isHeicFile(file)
+    const errorMessage = imageTools.isHeicFile(file)
       ? ["HEIC 图片无法读取", "请确认文件没有损坏；如果图片来自 iCloud，请先下载原图后重试。"]
-      : isTiffFile(file)
+      : imageTools.isTiffFile(file)
         ? ["TIFF 图片无法读取", "请确认文件没有损坏，或把多页 TIFF 导出为单张 PNG 后重试。"]
         : ["图片无法读取", "当前浏览器无法解码该格式，或文件可能已经损坏。"];
     if (hadCurrentImage) {
@@ -347,7 +368,7 @@ function createGuideButton(meta) {
   button.setAttribute("aria-orientation", GUIDE_AXIS[meta.key] === "x" ? "horizontal" : "vertical");
   button.setAttribute("aria-valuemin", "0");
   button.setAttribute("aria-valuemax", "100");
-  button.style.setProperty("--handle-position", meta.handle);
+  button.style.setProperty("--handle-position", `${meta.handle * 100}%`);
   button.innerHTML = `<span class="guide-stroke" aria-hidden="true"></span><span class="guide-handle" aria-hidden="true"><b>${meta.short}</b></span>`;
 
   button.addEventListener("pointerdown", beginGuideDrag);
@@ -362,35 +383,144 @@ function createGuideButton(meta) {
 function mountGuides() {
   elements.guideLayer.replaceChildren();
   guideButtons = new Map();
+  guideColors = new Map();
 
   GUIDE_META.forEach((meta) => {
     const button = createGuideButton(meta);
     guideButtons.set(meta.key, button);
     elements.guideLayer.append(button);
   });
-}
 
-function renderGuides() {
-  guideButtons.forEach((button, key) => {
-    const percentage = guides[key] * 100;
-    if (GUIDE_AXIS[key] === "x") {
-      button.style.left = `${percentage}%`;
-    } else {
-      button.style.top = `${percentage}%`;
-    }
-    button.setAttribute("aria-valuenow", percentage.toFixed(1));
-    button.setAttribute("aria-valuetext", `${percentage.toFixed(1)}%`);
+  const rootStyle = getComputedStyle(document.documentElement);
+  GUIDE_META.forEach((meta) => {
+    guideColors.set(
+      meta.key,
+      rootStyle.getPropertyValue(GUIDE_COLOR_PROPERTY[meta.direction]).trim() || "#fff",
+    );
   });
 }
 
-function applyGuideValue(key, value) {
+function renderGuide(key) {
+  const button = guideButtons.get(key);
+  if (!button) return;
+  const percentage = guides[key] * 100;
+  if (GUIDE_AXIS[key] === "x") {
+    button.style.left = `${percentage}%`;
+  } else {
+    button.style.top = `${percentage}%`;
+  }
+  button.setAttribute("aria-valuenow", percentage.toFixed(1));
+  button.setAttribute("aria-valuetext", `${percentage.toFixed(1)}%`);
+}
+
+function renderGuides() {
+  guideButtons.forEach((_button, key) => renderGuide(key));
+}
+
+function applyGuideValue(key, value, loupeState = null) {
   guides = moveGuide(guides, key, value);
-  renderGuides();
-  updateResults();
+  scheduleGuideUi(key, loupeState ? { ...loupeState, key } : null);
+}
+
+function hideGuideLoupe() {
+  elements.guideLoupe.hidden = true;
+}
+
+function drawLoupeImage(canvas, point, previewWidth, previewHeight) {
+  const sourceWidth = elements.sourceImage.naturalWidth;
+  const sourceHeight = elements.sourceImage.naturalHeight;
+  const sourceRect = correctionLoupeSourceRect(
+    point,
+    sourceWidth,
+    sourceHeight,
+    previewWidth,
+    previewHeight,
+  );
+  if (!sourceRect) return null;
+
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  const context = canvas.getContext("2d", { alpha: false });
+  const canvasSize = Math.round(CORRECTION_LOUPE_SIZE * pixelRatio);
+  if (canvas.width !== canvasSize || canvas.height !== canvasSize) {
+    canvas.width = canvasSize;
+    canvas.height = canvasSize;
+  }
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.fillStyle = "#0b0e0b";
+  context.fillRect(0, 0, CORRECTION_LOUPE_SIZE, CORRECTION_LOUPE_SIZE);
+
+  const sourceLeft = Math.max(0, sourceRect.x);
+  const sourceTop = Math.max(0, sourceRect.y);
+  const sourceRight = Math.min(sourceWidth, sourceRect.x + sourceRect.width);
+  const sourceBottom = Math.min(sourceHeight, sourceRect.y + sourceRect.height);
+  if (sourceRight > sourceLeft && sourceBottom > sourceTop) {
+    const scale = CORRECTION_LOUPE_SIZE / sourceRect.width;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      elements.sourceImage,
+      sourceLeft,
+      sourceTop,
+      sourceRight - sourceLeft,
+      sourceBottom - sourceTop,
+      (sourceLeft - sourceRect.x) * scale,
+      (sourceTop - sourceRect.y) * scale,
+      (sourceRight - sourceLeft) * scale,
+      (sourceBottom - sourceTop) * scale,
+    );
+  }
+  return context;
+}
+
+function drawGuideLoupe(pointer, key, layerRect = elements.guideLayer.getBoundingClientRect()) {
+  const meta = GUIDE_META_BY_KEY.get(key);
+  const axis = GUIDE_AXIS[key];
+  const point = guideLoupePoint(axis, guides[key], meta?.handle);
+  if (!meta || !point || !layerRect.width || !layerRect.height) return;
+
+  const context = drawLoupeImage(
+    elements.guideLoupeCanvas,
+    point,
+    layerRect.width,
+    layerRect.height,
+  );
+  const segment = guideLoupeSegment(axis);
+  if (!context || !segment) return;
+
+  const color = guideColors.get(key) || "#fff";
+  context.save();
+  context.beginPath();
+  context.moveTo(segment.start.x, segment.start.y);
+  context.lineTo(segment.end.x, segment.end.y);
+  context.setLineDash([5, 4]);
+  context.lineWidth = 2;
+  context.strokeStyle = color;
+  context.shadowColor = "rgba(0, 0, 0, 0.9)";
+  context.shadowBlur = 2;
+  context.stroke();
+  context.restore();
+
+  const frameRect = elements.measurementFrame.getBoundingClientRect();
+  const position = positionCorrectionLoupe(
+    pointer.clientX - frameRect.left,
+    pointer.clientY - frameRect.top,
+    frameRect.width,
+    frameRect.height,
+  );
+  elements.guideLoupe.style.left = `${position.left}px`;
+  elements.guideLoupe.style.top = `${position.top}px`;
+  elements.guideLoupe.style.setProperty("--loupe-outline", color);
+  elements.guideLoupeLabel.textContent = `${meta.label} · ${(guides[key] * 100).toFixed(1)}%`;
+  elements.guideLoupe.hidden = false;
 }
 
 function beginGuideDrag(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
+  if (activeDrag) {
+    event.stopPropagation();
+    event.preventDefault();
+    return;
+  }
 
   const button = event.currentTarget;
   const key = button.dataset.guide;
@@ -410,7 +540,11 @@ function updateGuideFromPointer(event, key) {
   const value = GUIDE_AXIS[key] === "x"
     ? (event.clientX - rect.left) / rect.width
     : (event.clientY - rect.top) / rect.height;
-  applyGuideValue(key, value);
+  applyGuideValue(key, value, {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    layerRect: rect,
+  });
 }
 
 function moveActiveGuide(event) {
@@ -437,6 +571,8 @@ function finishGuideDrag(pointerId, { releaseCapture = true, announce = true } =
 
   const drag = activeDrag;
   activeDrag = null;
+  scheduleGuideUi.flush();
+  hideGuideLoupe();
   drag.button.classList.remove("is-dragging");
   document.body.classList.remove("is-dragging-guide");
   if (releaseCapture) releasePointerCapture(drag.button, drag.pointerId);
@@ -528,6 +664,7 @@ function scheduleAnnouncement() {
 }
 
 function resetGuides() {
+  scheduleGuideUi.cancel();
   guides = { ...DEFAULT_GUIDES };
   renderGuides();
   updateResults();
@@ -585,7 +722,7 @@ function renderView() {
 function setView(nextState) {
   const { width, height, contentWidth, contentHeight } = viewSize();
   viewState = clampViewState(nextState, width, height, contentWidth, contentHeight);
-  renderView();
+  scheduleViewRender();
 }
 
 function resetView() {
@@ -608,7 +745,7 @@ function zoomAtPoint(requestedZoom, clientX, clientY) {
     contentWidth,
     contentHeight,
   );
-  renderView();
+  scheduleViewRender();
 }
 
 function zoomAtCenter(requestedZoom) {
@@ -623,7 +760,7 @@ function zoomAtCenter(requestedZoom) {
     contentWidth,
     contentHeight,
   );
-  renderView();
+  scheduleViewRender();
 }
 
 function pointerPairMetrics() {
@@ -702,7 +839,7 @@ function moveImageGesture(event) {
         contentWidth,
         contentHeight,
       );
-      renderView();
+      scheduleViewRender();
     }
   } else if (panGesture?.pointerId === event.pointerId) {
     viewState = panView(
@@ -714,7 +851,7 @@ function moveImageGesture(event) {
       contentWidth,
       contentHeight,
     );
-    renderView();
+    scheduleViewRender();
   }
 
   event.preventDefault();
@@ -790,7 +927,7 @@ function handleImageKeydown(event) {
       contentWidth,
       contentHeight,
     );
-    renderView();
+    scheduleViewRender();
   } else {
     return;
   }
@@ -907,12 +1044,7 @@ function renderCorrectionOverlay() {
   if (!frameWidth || !frameHeight) return;
   correctionOverlaySvg.setAttribute("viewBox", `0 0 ${frameWidth} ${frameHeight}`);
 
-  const basePoints = correctionRecipe.quad.map(correctionPointToScreen);
-  const adjustedPoints = correctionSampleQuad(
-    elements.sourceImage.naturalWidth,
-    elements.sourceImage.naturalHeight,
-    correctionRecipe,
-  ).map(correctionPointToScreen);
+  const adjustedPoints = correctionRecipe.quad.map(correctionPointToScreen);
   correctionOutline.setAttribute(
     "points",
     adjustedPoints.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
@@ -932,8 +1064,8 @@ function renderCorrectionOverlay() {
   });
 
   correctionHandleButtons.forEach((button, index) => {
-    button.style.left = `${basePoints[index].x}px`;
-    button.style.top = `${basePoints[index].y}px`;
+    button.style.left = `${adjustedPoints[index].x}px`;
+    button.style.top = `${adjustedPoints[index].y}px`;
   });
 }
 
@@ -989,46 +1121,25 @@ function setCorrectionSourceBusy(busy) {
 }
 
 function renderCorrectionUi() {
-  correctionRenderFrame = null;
+  if (!correctionTools || !correctionRecipe) return;
   renderCorrectionOverlay();
-  elements.straightenValue.textContent = `${Number(correctionRecipe.straighten).toFixed(1)}°`;
-  elements.verticalPerspectiveValue.textContent = String(Math.round(correctionRecipe.verticalPerspective));
-  elements.horizontalPerspectiveValue.textContent = String(Math.round(correctionRecipe.horizontalPerspective));
-  elements.aspectControl.querySelectorAll("button").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.aspect === correctionRecipe.aspect));
-  });
-  const assessment = assessCaptureGeometry(correctionRecipe);
+  const assessment = correctionTools.assessCaptureGeometry(correctionRecipe);
   elements.geometryAdvice.dataset.level = assessment.level;
   elements.geometryAdviceTitle.textContent = `四角对准后：${assessment.label}`;
-  const canApply = isConvexQuad(effectiveQuad(correctionRecipe));
+  const canApply = correctionTools.isConvexQuad(correctionRecipe.quad);
   elements.correctionApplyButton.disabled = !canApply;
   elements.correctionApplyButtonBottom.disabled = !canApply;
 }
 
-function scheduleCorrectionUi() {
-  if (correctionRenderFrame !== null) return;
-  correctionRenderFrame = window.requestAnimationFrame(renderCorrectionUi);
-}
-
-function resetCorrectionControls(recipe) {
-  correctionRecipe = recipe;
-  elements.straightenControl.value = String(recipe.straighten);
-  elements.verticalPerspectiveControl.value = String(recipe.verticalPerspective);
-  elements.horizontalPerspectiveControl.value = String(recipe.horizontalPerspective);
-}
-
 function createOriginalRestoreRecipe() {
   return {
-    ...createCorrectionRecipe(),
+    ...correctionTools.createCorrectionRecipe(),
     quad: ORIGINAL_RESTORE_QUAD.map((point) => ({ ...point })),
   };
 }
 
 function isOriginalRestoreRecipe(recipe) {
-  if (!recipe || recipe.aspect !== "free") return false;
-  if (Number(recipe.straighten) !== 0
-    || Number(recipe.verticalPerspective) !== 0
-    || Number(recipe.horizontalPerspective) !== 0) return false;
+  if (!recipe) return false;
   return ORIGINAL_RESTORE_QUAD.every((point, index) => (
     recipe.quad?.[index]?.x === point.x && recipe.quad[index].y === point.y
   ));
@@ -1045,8 +1156,8 @@ async function restoreOriginalImage() {
   showOriginalCorrectionPreview();
   setCorrectionSourceBusy(true);
   try {
-    const restoredSession = restoreOriginalCorrection(imageSession);
-    resetCorrectionControls(createOriginalRestoreRecipe());
+    const restoredSession = imageTools.restoreOriginalCorrection(imageSession);
+    correctionRecipe = createOriginalRestoreRecipe();
     await displaySourceImage(restoredSession.correctionBlob);
     imageSession = restoredSession;
     drawCorrectionSource();
@@ -1054,7 +1165,7 @@ async function restoreOriginalImage() {
     elements.resultAnnouncer.textContent = "已还原到最初上传的图片。应用校正可保存还原，取消可保留当前工作图。";
   } catch {
     imageSession = previousSession;
-    resetCorrectionControls(previousRecipe);
+    correctionRecipe = previousRecipe;
     await displaySourceImage(previousSession.correctionBlob).catch(() => {});
     drawCorrectionSource();
     renderCorrectionUi();
@@ -1071,11 +1182,7 @@ function hideCorrectionLoupe() {
 }
 
 function drawCorrectionLoupeGuides(context, recipe, cornerIndex) {
-  const adjustedPoints = correctionSampleQuad(
-    elements.sourceImage.naturalWidth,
-    elements.sourceImage.naturalHeight,
-    recipe,
-  ).map(correctionPointToScreen);
+  const adjustedPoints = recipe.quad.map(correctionPointToScreen);
   const segments = correctionLoupeGuideSegments(adjustedPoints, cornerIndex);
   if (!segments.length) return;
 
@@ -1095,49 +1202,13 @@ function drawCorrectionLoupeGuides(context, recipe, cornerIndex) {
 }
 
 function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex, recipe = correctionRecipe) {
-  const sourceWidth = elements.sourceImage.naturalWidth;
-  const sourceHeight = elements.sourceImage.naturalHeight;
-  const sourceRect = correctionLoupeSourceRect(
+  const context = drawLoupeImage(
+    elements.correctionLoupeCanvas,
     point,
-    sourceWidth,
-    sourceHeight,
     correctionPreviewRect.width,
     correctionPreviewRect.height,
   );
-  if (!sourceRect) return;
-
-  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
-  const canvas = elements.correctionLoupeCanvas;
-  const context = canvas.getContext("2d", { alpha: false });
-  const canvasSize = Math.round(CORRECTION_LOUPE_SIZE * pixelRatio);
-  if (canvas.width !== canvasSize || canvas.height !== canvasSize) {
-    canvas.width = canvasSize;
-    canvas.height = canvasSize;
-  }
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.fillStyle = "#0b0e0b";
-  context.fillRect(0, 0, CORRECTION_LOUPE_SIZE, CORRECTION_LOUPE_SIZE);
-
-  const sourceLeft = Math.max(0, sourceRect.x);
-  const sourceTop = Math.max(0, sourceRect.y);
-  const sourceRight = Math.min(sourceWidth, sourceRect.x + sourceRect.width);
-  const sourceBottom = Math.min(sourceHeight, sourceRect.y + sourceRect.height);
-  if (sourceRight > sourceLeft && sourceBottom > sourceTop) {
-    const scale = CORRECTION_LOUPE_SIZE / sourceRect.width;
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
-    context.drawImage(
-      elements.sourceImage,
-      sourceLeft,
-      sourceTop,
-      sourceRight - sourceLeft,
-      sourceBottom - sourceTop,
-      (sourceLeft - sourceRect.x) * scale,
-      (sourceTop - sourceRect.y) * scale,
-      (sourceRight - sourceLeft) * scale,
-      (sourceBottom - sourceTop) * scale,
-    );
-  }
+  if (!context) return;
   drawCorrectionLoupeGuides(context, recipe, cornerIndex);
 
   const position = positionCorrectionLoupe(
@@ -1182,18 +1253,24 @@ function moveCornerDrag(event) {
   const nextQuad = correctionRecipe.quad.map((current, index) => (
     index === activeCornerDrag.index ? point : current
   ));
-  if (isConvexQuad(nextQuad)) {
+  if (correctionTools.isConvexQuad(nextQuad)) {
     const nextRecipe = { ...correctionRecipe, quad: nextQuad };
-    drawCorrectionLoupe(point, pointerX, pointerY, activeCornerDrag.index, nextRecipe);
     correctionRecipe = nextRecipe;
-    scheduleCorrectionUi();
-  } else {
-    drawCorrectionLoupe(
-      correctionRecipe.quad[activeCornerDrag.index],
+    scheduleCorrectionDragUi({
+      point,
       pointerX,
       pointerY,
-      activeCornerDrag.index,
-    );
+      cornerIndex: activeCornerDrag.index,
+      recipe: nextRecipe,
+    });
+  } else {
+    scheduleCorrectionDragUi({
+      point: correctionRecipe.quad[activeCornerDrag.index],
+      pointerX,
+      pointerY,
+      cornerIndex: activeCornerDrag.index,
+      recipe: correctionRecipe,
+    });
   }
   event.preventDefault();
 }
@@ -1204,6 +1281,7 @@ function finishCornerDrag(pointerId, { releaseCapture = true } = {}) {
 
   const drag = activeCornerDrag;
   activeCornerDrag = null;
+  scheduleCorrectionDragUi.flush();
   drag.button.classList.remove("is-dragging");
   if (releaseCapture) releasePointerCapture(drag.button, drag.pointerId);
   hideCorrectionLoupe();
@@ -1233,12 +1311,18 @@ function handleVisibilityChange() {
   if (document.hidden) cancelActivePointerInteractions();
 }
 
-function openCorrection() {
+async function openCorrection() {
   if (!imageSession?.workingBlob) return;
   dismissNotice();
   hideCorrectionLoupe();
-  imageSession = beginImageCorrection(imageSession);
-  resetCorrectionControls(createCorrectionRecipe());
+  try {
+    await Promise.all([loadImageTools(), loadCorrectionTools()]);
+  } catch {
+    notifyUser("校正工具无法读取", "请刷新页面后重试；当前图片没有变化。");
+    return;
+  }
+  imageSession = imageTools.beginImageCorrection(imageSession);
+  correctionRecipe = correctionTools.createCorrectionRecipe();
   showView(elements.correctionView);
   window.requestAnimationFrame(() => {
     drawCorrectionSource();
@@ -1250,7 +1334,7 @@ async function cancelCorrection() {
   if (!imageSession?.workingBlob) return;
   hideCorrectionLoupe();
   showOriginalCorrectionPreview();
-  imageSession = beginImageCorrection(imageSession);
+  imageSession = imageTools.beginImageCorrection(imageSession);
   await displaySourceImage(imageSession.workingBlob);
   showView(elements.editorView);
   window.requestAnimationFrame(updateImageCanvasSize);
@@ -1264,31 +1348,28 @@ function showOriginalCorrectionPreview() {
 }
 
 function showCorrectedCorrectionPreview(event) {
-  if (!isConvexQuad(effectiveQuad(correctionRecipe))) return;
-  const size = correctionOutputSize(
+  if (!correctionTools || !correctionRecipe) return;
+  if (!correctionTools.isConvexQuad(correctionRecipe.quad)) return;
+  const size = correctionTools.correctionOutputSize(
     elements.sourceImage.naturalWidth,
     elements.sourceImage.naturalHeight,
     correctionRecipe,
     1400,
   );
-  const renderer = renderCorrectionToCanvas(
+  const renderer = correctionTools.renderCorrectionToCanvas(
     elements.sourceImage,
     correctionRecipe,
     elements.correctionResultCanvas,
     size,
   );
-  if (renderer !== "webgl" && requiresProjectiveCorrection(
-    elements.sourceImage.naturalWidth,
-    elements.sourceImage.naturalHeight,
-    correctionRecipe,
-  )) {
+  if (renderer !== "webgl" && correctionTools.requiresProjectiveCorrection(correctionRecipe)) {
     elements.correctionRendererNote.textContent = "当前设备只能执行矩形裁剪，无法可靠预览四角或透视校正。";
-    notifyUser("当前浏览器无法预览透视校正", "仍可还原四角和透视滑杆后执行普通矩形裁剪。");
+    notifyUser("当前浏览器无法预览透视校正", "可点还原原图后执行普通矩形裁剪。");
     return;
   }
   elements.correctionRendererNote.textContent = renderer === "webgl"
-    ? "透视预览由本机 GPU 生成；图片不会上传。应用后参考线会重置。"
-    : "当前设备仅支持矩形裁剪；四角和透视校正需要较新的浏览器。";
+    ? "四角裁剪与拉正预览由本机 GPU 生成；图片不会上传。"
+    : "当前设备仅支持矩形裁剪；四角透视拉正需要较新的浏览器。";
   elements.correctionCanvas.hidden = true;
   elements.correctionResultCanvas.hidden = false;
   elements.correctionHandles.hidden = true;
@@ -1298,7 +1379,8 @@ function showCorrectedCorrectionPreview(event) {
 }
 
 async function applyCorrection() {
-  if (!isConvexQuad(effectiveQuad(correctionRecipe))) {
+  if (!imageTools || !correctionTools || !correctionRecipe) return;
+  if (!correctionTools.isConvexQuad(correctionRecipe.quad)) {
     notifyUser("四个角点没有形成有效区域", "请让四个角按左上、右上、右下、左下依次围住卡片。");
     return;
   }
@@ -1311,22 +1393,18 @@ async function applyCorrection() {
       && isOriginalRestoreRecipe(correctionRecipe)) {
       correctedBlob = imageSession.originalBlob;
     } else {
-      const size = correctionOutputSize(
+      const size = correctionTools.correctionOutputSize(
         elements.sourceImage.naturalWidth,
         elements.sourceImage.naturalHeight,
         correctionRecipe,
-        MAX_WORKING_EDGE,
+        imageTools.MAX_WORKING_EDGE,
       );
       const canvas = elements.correctionResultCanvas;
-      const renderer = renderCorrectionToCanvas(elements.sourceImage, correctionRecipe, canvas, size);
-      if (renderer !== "webgl" && requiresProjectiveCorrection(
-        elements.sourceImage.naturalWidth,
-        elements.sourceImage.naturalHeight,
-        correctionRecipe,
-      )) {
+      const renderer = correctionTools.renderCorrectionToCanvas(elements.sourceImage, correctionRecipe, canvas, size);
+      if (renderer !== "webgl" && correctionTools.requiresProjectiveCorrection(correctionRecipe)) {
         throw new Error("当前浏览器不支持透视校正");
       }
-      correctedBlob = await canvasToBlob(canvas, "image/jpeg", 0.94);
+      correctedBlob = await imageTools.canvasToBlob(canvas, "image/jpeg", 0.94);
     }
     await displayWorkingImage(correctedBlob);
     guides = { ...DEFAULT_GUIDES };
@@ -1339,7 +1417,7 @@ async function applyCorrection() {
       notifyUser("图片校正已应用", "外沿参考线已贴合图片边缘，请继续对齐图案内沿。");
     });
   } catch (error) {
-    notifyUser("无法应用图片校正", error?.message || "请还原透视滑杆后重试。");
+    notifyUser("无法应用图片校正", error?.message || "请重新拖动四角后重试。");
   } finally {
     setCorrectionBusy(false);
   }
@@ -1358,6 +1436,32 @@ function handleFileInput(event) {
 function setDropZoneActive(active) {
   elements.dropZone.classList.toggle("is-drop-target", active);
 }
+
+const scheduleGuideUi = createKeyedFrameScheduler((keys, loupeState) => {
+  keys.forEach(renderGuide);
+  updateResults();
+  if (loupeState) {
+    drawGuideLoupe(loupeState, loupeState.key, loupeState.layerRect);
+  }
+}, window);
+const scheduleViewRender = createFrameScheduler(renderView, window);
+const scheduleMeasurementLayout = createFrameScheduler(updateImageCanvasSize, window);
+const scheduleCorrectionDragUi = createFrameScheduler((loupeState) => {
+  renderCorrectionUi();
+  if (loupeState) {
+    drawCorrectionLoupe(
+      loupeState.point,
+      loupeState.pointerX,
+      loupeState.pointerY,
+      loupeState.cornerIndex,
+      loupeState.recipe,
+    );
+  }
+}, window);
+const scheduleCorrectionLayout = createFrameScheduler(() => {
+  drawCorrectionSource();
+  renderCorrectionUi();
+}, window);
 
 elements.chooseImageButton.addEventListener("click", requestImage);
 elements.changeImageButton.addEventListener("click", requestImage);
@@ -1391,25 +1495,6 @@ elements.correctionCompareButton.addEventListener("pointerdown", showCorrectedCo
 elements.correctionCompareButton.addEventListener("pointerup", showOriginalCorrectionPreview);
 elements.correctionCompareButton.addEventListener("pointercancel", showOriginalCorrectionPreview);
 elements.correctionCompareButton.addEventListener("lostpointercapture", showOriginalCorrectionPreview);
-elements.aspectControl.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-aspect]");
-  if (!button) return;
-  correctionRecipe = { ...correctionRecipe, aspect: button.dataset.aspect };
-  scheduleCorrectionUi();
-});
-elements.straightenControl.addEventListener("input", (event) => {
-  correctionRecipe = { ...correctionRecipe, straighten: Number(event.target.value) };
-  scheduleCorrectionUi();
-});
-elements.verticalPerspectiveControl.addEventListener("input", (event) => {
-  correctionRecipe = { ...correctionRecipe, verticalPerspective: Number(event.target.value) };
-  scheduleCorrectionUi();
-});
-elements.horizontalPerspectiveControl.addEventListener("input", (event) => {
-  correctionRecipe = { ...correctionRecipe, horizontalPerspective: Number(event.target.value) };
-  scheduleCorrectionUi();
-});
-
 elements.dropZone.addEventListener("dragenter", (event) => {
   event.preventDefault();
   setDropZoneActive(true);
@@ -1432,7 +1517,11 @@ elements.dropZone.addEventListener("drop", (event) => {
 
 window.addEventListener("beforeunload", () => {
   clearProcessingTimers();
-  if (correctionRenderFrame !== null) window.cancelAnimationFrame(correctionRenderFrame);
+  scheduleGuideUi.cancel();
+  scheduleViewRender.cancel();
+  scheduleMeasurementLayout.cancel();
+  scheduleCorrectionDragUi.cancel();
+  scheduleCorrectionLayout.cancel();
   if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
 });
 window.addEventListener("paste", handlePaste);
@@ -1442,12 +1531,11 @@ window.addEventListener("blur", cancelActivePointerInteractions);
 document.addEventListener("visibilitychange", handleVisibilityChange);
 
 if ("ResizeObserver" in window) {
-  const measurementResizeObserver = new ResizeObserver(updateImageCanvasSize);
+  const measurementResizeObserver = new ResizeObserver(scheduleMeasurementLayout);
   measurementResizeObserver.observe(elements.measurementFrame);
   const correctionResizeObserver = new ResizeObserver(() => {
     if (document.body.dataset.view !== "correction-view") return;
-    drawCorrectionSource();
-    renderCorrectionUi();
+    scheduleCorrectionLayout();
   });
   correctionResizeObserver.observe(elements.correctionFrame);
 }

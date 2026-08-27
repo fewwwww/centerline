@@ -5,7 +5,6 @@ const DEFAULT_QUAD = Object.freeze([
   Object.freeze({ x: 0.06, y: 0.94 }),
 ]);
 
-const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 const distance = (first, second) => Math.hypot(second.x - first.x, second.y - first.y);
 const radiansToDegrees = (radians) => radians * (180 / Math.PI);
 
@@ -19,10 +18,6 @@ function sourceDistance(first, second, sourceWidth, sourceHeight) {
 export function createCorrectionRecipe() {
   return {
     quad: DEFAULT_QUAD.map((point) => ({ ...point })),
-    straighten: 0,
-    verticalPerspective: 0,
-    horizontalPerspective: 0,
-    aspect: "free",
   };
 }
 
@@ -41,39 +36,6 @@ export function isConvexQuad(quad) {
     return sum + (point.x * next.y) - (next.x * point.y);
   }, 0) / 2);
   return (allPositive || allNegative) && area >= 0.01;
-}
-
-function rotatePoint(point, angle, center = { x: 0.5, y: 0.5 }) {
-  const radians = angle * (Math.PI / 180);
-  const cosine = Math.cos(radians);
-  const sine = Math.sin(radians);
-  const x = point.x - center.x;
-  const y = point.y - center.y;
-  return {
-    x: center.x + (x * cosine) - (y * sine),
-    y: center.y + (x * sine) + (y * cosine),
-  };
-}
-
-export function effectiveQuad(recipe) {
-  const vertical = clamp(Number(recipe.verticalPerspective) || 0, -100, 100) / 100;
-  const horizontal = clamp(Number(recipe.horizontalPerspective) || 0, -100, 100) / 100;
-  const verticalTop = Math.max(0, vertical) * 0.18;
-  const verticalBottom = Math.max(0, -vertical) * 0.18;
-  const horizontalLeft = Math.max(0, horizontal) * 0.18;
-  const horizontalRight = Math.max(0, -horizontal) * 0.18;
-  const adjusted = recipe.quad.map((point, index) => ({
-    x: point.x + (index === 0 ? verticalTop : index === 1 ? -verticalTop : index === 2 ? -verticalBottom : verticalBottom),
-    y: point.y + (index === 0 ? horizontalLeft : index === 1 ? horizontalRight : index === 2 ? -horizontalRight : -horizontalLeft),
-  }));
-
-  return adjusted.map((point) => {
-    const rotated = rotatePoint(point, Number(recipe.straighten) || 0);
-    return {
-      x: clamp(rotated.x, 0.001, 0.999),
-      y: clamp(rotated.y, 0.001, 0.999),
-    };
-  });
 }
 
 function lineAngle(first, second) {
@@ -101,12 +63,10 @@ export function assessCaptureGeometry(recipe) {
   const bottomAngle = lineAngle(quad[3], quad[2]);
   const leftAngle = lineAngle(quad[0], quad[3]);
   const rightAngle = lineAngle(quad[1], quad[2]);
-  const rotation = Math.abs((topAngle + bottomAngle) / 2) + Math.abs(Number(recipe.straighten) || 0);
+  const rotation = Math.abs((topAngle + bottomAngle) / 2);
   const opposingDifference = Math.max(
     normalizedDifference(distance(quad[0], quad[1]), distance(quad[3], quad[2])),
     normalizedDifference(distance(quad[0], quad[3]), distance(quad[1], quad[2])),
-    Math.abs(Number(recipe.verticalPerspective) || 0) / 100,
-    Math.abs(Number(recipe.horizontalPerspective) || 0) / 100,
   );
   const convergence = Math.max(
     Math.abs(topAngle - bottomAngle),
@@ -186,7 +146,7 @@ export function projectPoint(matrix, x, y) {
 }
 
 function rectifiedGeometry(sourceWidth, sourceHeight, recipe) {
-  const quad = effectiveQuad(recipe);
+  const quad = recipe.quad;
   const naturalWidth = (
     sourceDistance(quad[0], quad[1], sourceWidth, sourceHeight)
     + sourceDistance(quad[3], quad[2], sourceWidth, sourceHeight)
@@ -195,50 +155,25 @@ function rectifiedGeometry(sourceWidth, sourceHeight, recipe) {
     sourceDistance(quad[0], quad[3], sourceWidth, sourceHeight)
     + sourceDistance(quad[1], quad[2], sourceWidth, sourceHeight)
   ) / 2;
-  const naturalRatio = naturalWidth / Math.max(1, naturalHeight);
-  const targetRatio = recipe.aspect === "original"
-    ? sourceWidth / sourceHeight
-    : recipe.aspect === "5:7" ? 5 / 7 : naturalRatio;
-  let spanX = 1;
-  let spanY = 1;
-  if (targetRatio < naturalRatio) spanX = targetRatio / naturalRatio;
-  if (targetRatio > naturalRatio) spanY = naturalRatio / targetRatio;
-  return { quad, naturalWidth, naturalHeight, spanX, spanY };
-}
-
-export function correctionSampleQuad(sourceWidth, sourceHeight, recipe) {
-  const { quad, spanX, spanY } = rectifiedGeometry(sourceWidth, sourceHeight, recipe);
-  if (spanX === 1 && spanY === 1) return quad;
-  const matrix = solveUnitSquareToQuad(quad);
-  if (!matrix) return quad;
-  const left = (1 - spanX) / 2;
-  const right = 1 - left;
-  const top = (1 - spanY) / 2;
-  const bottom = 1 - top;
-  return [
-    projectPoint(matrix, left, top),
-    projectPoint(matrix, right, top),
-    projectPoint(matrix, right, bottom),
-    projectPoint(matrix, left, bottom),
-  ];
+  return { quad, naturalWidth, naturalHeight };
 }
 
 export function correctionOutputSize(sourceWidth, sourceHeight, recipe, maximumEdge = 4096) {
-  const { naturalWidth, naturalHeight, spanX, spanY } = rectifiedGeometry(
+  const { naturalWidth, naturalHeight } = rectifiedGeometry(
     sourceWidth,
     sourceHeight,
     recipe,
   );
-  let width = Math.max(64, naturalWidth * spanX);
-  let height = Math.max(64, naturalHeight * spanY);
+  let width = Math.max(64, naturalWidth);
+  let height = Math.max(64, naturalHeight);
   const scale = Math.min(1, maximumEdge / Math.max(width, height));
   width = Math.max(64, Math.round(width * scale));
   height = Math.max(64, Math.round(height * scale));
   return { width, height };
 }
 
-export function requiresProjectiveCorrection(sourceWidth, sourceHeight, recipe) {
-  const quad = correctionSampleQuad(sourceWidth, sourceHeight, recipe);
+export function requiresProjectiveCorrection(recipe) {
+  const quad = recipe.quad;
   const epsilon = 1e-5;
   return Math.abs(quad[0].x - quad[3].x) > epsilon
     || Math.abs(quad[1].x - quad[2].x) > epsilon
@@ -325,9 +260,10 @@ function createWebGlRenderer(canvas) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.uniform1i(gl.getUniformLocation(program, "u_image"), 0);
+  const mapLocation = gl.getUniformLocation(program, "u_map");
   gl.deleteShader(vertexShader);
   gl.deleteShader(fragmentShader);
-  return { gl, program, buffer, texture, sourceVersion: null };
+  return { gl, program, buffer, texture, mapLocation, sourceVersion: null };
 }
 
 function renderWithWebGl(source, matrix, canvas) {
@@ -337,7 +273,7 @@ function renderWithWebGl(source, matrix, canvas) {
     if (!renderer) return false;
     webGlRenderers.set(canvas, renderer);
   }
-  const { gl, program, buffer, texture } = renderer;
+  const { gl, program, buffer, texture, mapLocation } = renderer;
   gl.useProgram(program);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -346,7 +282,7 @@ function renderWithWebGl(source, matrix, canvas) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
     renderer.sourceVersion = sourceVersion;
   }
-  gl.uniformMatrix3fv(gl.getUniformLocation(program, "u_map"), false, new Float32Array([
+  gl.uniformMatrix3fv(mapLocation, false, new Float32Array([
     matrix[0], matrix[3], matrix[6],
     matrix[1], matrix[4], matrix[7],
     matrix[2], matrix[5], matrix[8],
@@ -372,9 +308,7 @@ function renderFallback(source, quad, canvas) {
 }
 
 export function renderCorrectionToCanvas(source, recipe, canvas, outputSize) {
-  const sourceWidth = source.naturalWidth || source.width;
-  const sourceHeight = source.naturalHeight || source.height;
-  const quad = correctionSampleQuad(sourceWidth, sourceHeight, recipe);
+  const quad = recipe.quad;
   const matrix = solveUnitSquareToQuad(quad);
   if (!matrix) throw new Error("四个裁剪角点需要形成完整的卡片区域");
   canvas.width = Math.max(1, Math.round(outputSize.width));

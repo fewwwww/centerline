@@ -9,6 +9,8 @@ import {
   computeMeasurementImageSize,
   correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
+  guideLoupePoint,
+  guideLoupeSegment,
   guideScreenWidth,
   pointerButtonsAreReleased,
   panView,
@@ -112,7 +114,32 @@ test("correction loupe samples a magnified square centered on the dragged point"
   assert.equal(rect.width, rect.height);
   assert.ok(Math.abs((rect.x + (rect.width / 2)) - 250) < 1e-9);
   assert.ok(Math.abs((rect.y + (rect.height / 2)) - 1125) < 1e-9);
+  const zoomedRect = correctionLoupeSourceRect(
+    { x: 0.25, y: 0.75 },
+    1000,
+    1500,
+    600,
+    900,
+  );
+  assert.ok(Math.abs(zoomedRect.width - (rect.width / 2)) < 1e-9);
   assert.equal(correctionLoupeSourceRect({ x: 0.5, y: 0.5 }, 1000, 1500, 0, 450), null);
+});
+
+test("guide loupe samples the circular handle and keeps its guide centered", () => {
+  assert.deepEqual(guideLoupePoint("x", 0.28, 0.42), { x: 0.28, y: 0.42 });
+  assert.deepEqual(guideLoupePoint("y", 0.73, 0.58), { x: 0.58, y: 0.73 });
+  assert.deepEqual(guideLoupePoint("x", -1, 2), { x: 0, y: 1 });
+  assert.equal(guideLoupePoint("z", 0.5, 0.5), null);
+
+  assert.deepEqual(guideLoupeSegment("x", 100), {
+    start: { x: 50, y: 0 },
+    end: { x: 50, y: 100 },
+  });
+  assert.deepEqual(guideLoupeSegment("y", 100), {
+    start: { x: 0, y: 50 },
+    end: { x: 100, y: 50 },
+  });
+  assert.equal(guideLoupeSegment("z", 100), null);
 });
 
 test("correction loupe guides follow both dashed edges beside every dragged corner", () => {

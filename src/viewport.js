@@ -173,6 +173,23 @@ export function correctionLoupeSourceRect(
   };
 }
 
+export function guideLoupePoint(axis, value, handlePosition) {
+  if (axis !== "x" && axis !== "y") return null;
+  const guideValue = clamp(Number(value) || 0, 0, 1);
+  const handleValue = clamp(Number(handlePosition) || 0, 0, 1);
+  return axis === "x"
+    ? { x: guideValue, y: handleValue }
+    : { x: handleValue, y: guideValue };
+}
+
+export function guideLoupeSegment(axis, size = CORRECTION_LOUPE_SIZE) {
+  if ((axis !== "x" && axis !== "y") || !(size > 0)) return null;
+  const center = size / 2;
+  return axis === "x"
+    ? { start: { x: center, y: 0 }, end: { x: center, y: size } }
+    : { start: { x: 0, y: center }, end: { x: size, y: center } };
+}
+
 export function correctionLoupeGuideSegments(
   quad,
   cornerIndex,
