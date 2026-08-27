@@ -85,7 +85,7 @@ test("static metadata and GitHub Pages subpath-safe links stay explicit", async 
   assert.match(html, /卡牌居中比例/);
   assert.match(html, /卡牌居中 · 手动测量/);
   assert.match(html, /左右 \/ 上下比例/);
-  assert.match(html, /id="measurement-example-title">PSA 10 ≈ 四边接近均匀<\/h2>/);
+  assert.match(html, /id="measurement-example-title">四边同宽 ≈ PSA 10<\/h2>/);
   assert.match(html, /<span>左右<\/span><strong>50 \/ 50<\/strong>/);
   assert.match(html, /<span>上下<\/span><strong>46 \/ 54<\/strong>/);
   assert.doesNotMatch(html, /为什么它显示|最终评级还取决于|class="example-explanation"/);
