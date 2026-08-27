@@ -31,6 +31,7 @@ test("static build contains only deployable browser assets", async () => {
     "src/measurement.js",
     "src/perspective.js",
     "src/viewport.js",
+    "src/viewport-controller.js",
   ];
 
   await Promise.all(expectedFiles.map((relativePath) => access(new URL(relativePath, distUrl))));
@@ -149,7 +150,7 @@ test("production build injects the exact GitHub Pages base URL", async () => {
       readFile(new URL("sitemap.xml", distUrl), "utf8"),
     ]);
 
-    assert.ok(stdout.includes(`Built 22 static files into dist for ${siteUrl}`));
+    assert.ok(stdout.includes(`Built 23 static files into dist for ${siteUrl}`));
     assert.ok(html.includes(`<link rel="canonical" href="${siteUrl}"`));
     assert.ok(html.includes(`<meta property="og:url" content="${siteUrl}"`));
     assert.ok(html.includes(
@@ -255,6 +256,85 @@ test("viewport and guide style contracts stay explicit", async () => {
   assert.doesNotMatch(html, /实线/);
 });
 
+test("editor actions omit the redundant guide reset flow", async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL("index.html", projectUrl), "utf8"),
+    readFile(new URL("src/app.js", projectUrl), "utf8"),
+    readFile(new URL("styles.css", projectUrl), "utf8"),
+  ]);
+
+  assert.doesNotMatch(html, /reset-guides-button|重置参考线/);
+  assert.doesNotMatch(app, /resetGuidesButton|function resetGuides/);
+  assert.match(
+    styles,
+    /\.editor-actions\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    styles,
+    /body\[data-view="editor-view"\] \.editor-actions\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /(?:body\[data-view="editor-view"\] )?\.editor-actions\s*\{[^}]*grid-template-columns:\s*repeat\(3,/,
+  );
+});
+
+test("correction view has independent zoom and pan without covering crop corners", async () => {
+  const [html, app, controller, styles] = await Promise.all([
+    readFile(new URL("index.html", projectUrl), "utf8"),
+    readFile(new URL("src/app.js", projectUrl), "utf8"),
+    readFile(new URL("src/viewport-controller.js", projectUrl), "utf8"),
+    readFile(new URL("styles.css", projectUrl), "utf8"),
+  ]);
+
+  assert.match(html, /id="correction-zoom-out-button"/);
+  assert.match(html, /id="correction-zoom-reset-button"/);
+  assert.match(html, /id="correction-zoom-in-button"/);
+  assert.match(html, /id="correction-frame"[\s\S]*?tabindex="0"/);
+  assert.ok(
+    html.indexOf('class="zoom-controls zoom-controls-panel"')
+      > html.indexOf('<aside class="correction-panel"'),
+    "correction zoom controls must live in the side panel instead of covering corner handles",
+  );
+  assert.match(
+    styles,
+    /\.zoom-controls\.zoom-controls-panel\s*\{[\s\S]*?position:\s*relative;[\s\S]*?width:\s*100%/,
+  );
+  assert.match(
+    styles,
+    /:is\(\.measurement-frame, \.correction-frame\)\.is-zoomed\s*\{/,
+  );
+  assert.doesNotMatch(styles, /\.(?:measurement|correction)-frame\.is-zoomed\s*\{/);
+  assert.match(app, /correctionViewport = createViewportController\(\{/);
+  assert.match(app, /ignoreSelector: "\.corner-handle"/);
+  assert.match(app, /canInteract: \(\) => elements\.correctionResultCanvas\.hidden/);
+  assert.match(
+    controller,
+    /frame\.addEventListener\("wheel", handleWheel, \{ passive: false \}\)/,
+  );
+  assert.match(
+    app,
+    /const layout = computeZoomedContainRect\([\s\S]*?correctionViewport\?\.getState\(\)[\s\S]*?correctionPreviewRect = \{[\s\S]*?left: layout\.left/,
+  );
+});
+
+test("homepage measurement example keeps the full card inside its responsive row", async () => {
+  const styles = await readFile(new URL("styles.css", projectUrl), "utf8");
+
+  assert.match(
+    styles,
+    /\.measurement-example\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    styles,
+    /\.example-photo\s*\{[\s\S]*?justify-self:\s*start/,
+  );
+  assert.match(
+    styles,
+    /\.example-photo img\s*\{[\s\S]*?object-fit:\s*contain/,
+  );
+});
+
 test("initial application path defers image decoding and correction code until needed", async () => {
   const app = await readFile(new URL("src/app.js", projectUrl), "utf8");
 
@@ -263,6 +343,7 @@ test("initial application path defers image decoding and correction code until n
   assert.doesNotMatch(app, /from "\.\/image\.js"/);
   assert.doesNotMatch(app, /from "\.\/perspective\.js"/);
   assert.match(app, /createFrameScheduler/);
+  assert.match(app, /from "\.\/viewport-controller\.js"/);
 });
 
 test("stacked editor keeps a usable image row at browser zoom widths", async () => {
@@ -283,14 +364,19 @@ test("stacked editor keeps a usable image row at browser zoom widths", async () 
 });
 
 test("pointer interactions have page-wide and capture-loss release fallbacks", async () => {
-  const app = await readFile(new URL("src/app.js", projectUrl), "utf8");
+  const [app, controller] = await Promise.all([
+    readFile(new URL("src/app.js", projectUrl), "utf8"),
+    readFile(new URL("src/viewport-controller.js", projectUrl), "utf8"),
+  ]);
 
   assert.match(app, /button\.addEventListener\("lostpointercapture", endGuideDrag\)/);
   assert.match(app, /button\.addEventListener\("lostpointercapture", endCornerDrag\)/);
   assert.match(
-    app,
-    /elements\.measurementFrame\.addEventListener\("lostpointercapture", endImageGesture\)/,
+    controller,
+    /frame\.addEventListener\("lostpointercapture", endPointer\)/,
   );
+  assert.match(app, /measurementViewport\?\.endPointer\(event\)/);
+  assert.match(app, /correctionViewport\?\.endPointer\(event\)/);
   assert.match(
     app,
     /window\.addEventListener\("pointerup", endActivePointerInteractions, true\)/,

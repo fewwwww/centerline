@@ -11,25 +11,20 @@ import {
   createKeyedFrameScheduler,
 } from "./frame-scheduler.js";
 import {
-  MAX_VIEW_ZOOM,
-  MIN_VIEW_ZOOM,
-  VIEW_ZOOM_STEP,
   CORRECTION_LOUPE_MAGNIFICATION,
   CORRECTION_LOUPE_SIZE,
-  clampViewState,
   computeContainSize,
   computeMeasurementImageSize,
+  computeZoomedContainRect,
   correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
   guideLoupePoint,
   guideLoupeSegment,
   guideScreenWidth,
   pointerButtonsAreReleased,
-  panView,
-  pinchView,
   positionCorrectionLoupe,
-  zoomViewAt,
 } from "./viewport.js";
+import { createViewportController } from "./viewport-controller.js";
 const GUIDE_META = [
   { key: "outerLeft", label: "左外沿", short: "外", direction: "left", kind: "outer", axis: "vertical", handle: 0.42 },
   { key: "innerLeft", label: "左内沿", short: "内", direction: "left", kind: "inner", axis: "vertical", handle: 0.58 },
@@ -70,7 +65,6 @@ const elements = {
   uploadError: document.querySelector("#upload-error"),
   uploadErrorTitle: document.querySelector("#upload-error-title"),
   uploadErrorDetail: document.querySelector("#upload-error-detail"),
-  resetGuidesButton: document.querySelector("#reset-guides-button"),
   changeImageButton: document.querySelector("#change-image-button"),
   correctImageButton: document.querySelector("#correct-image-button"),
   measurementFrame: document.querySelector("#measurement-frame"),
@@ -104,6 +98,10 @@ const elements = {
   correctionLoupeCanvas: document.querySelector("#correction-loupe-canvas"),
   correctionLoupeLabel: document.querySelector("#correction-loupe-label"),
   correctionCompareButton: document.querySelector("#correction-compare-button"),
+  correctionZoomOutButton: document.querySelector("#correction-zoom-out-button"),
+  correctionZoomResetButton: document.querySelector("#correction-zoom-reset-button"),
+  correctionZoomInButton: document.querySelector("#correction-zoom-in-button"),
+  correctionZoomValue: document.querySelector("#correction-zoom-value"),
   correctionResetButton: document.querySelector("#correction-reset-button"),
   correctionResetButtonBottom: document.querySelector("#correction-reset-button-bottom"),
   correctionCancelButton: document.querySelector("#correction-cancel-button"),
@@ -125,13 +123,11 @@ let imageSession = null;
 let processingTimers = [];
 let announceTimer = null;
 let imageLoadSequence = 0;
-let viewState = { zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 };
-const imagePointers = new Map();
-let panGesture = null;
-let pinchGesture = null;
+let measurementViewport = null;
 let psaSide = "front";
 let correctionRecipe = null;
 let correctionPreviewRect = { left: 0, top: 0, width: 0, height: 0 };
+let correctionViewport = null;
 let activeCornerDrag = null;
 let imageToolsPromise = null;
 let correctionToolsPromise = null;
@@ -336,7 +332,7 @@ async function handleFile(file, source = "file") {
     showView(elements.editorView);
     window.requestAnimationFrame(() => {
       updateImageCanvasSize();
-      resetView();
+      measurementViewport?.reset();
       renderGuides();
     });
   } catch {
@@ -663,14 +659,6 @@ function scheduleAnnouncement() {
   announceTimer = window.setTimeout(announceResults, 250);
 }
 
-function resetGuides() {
-  scheduleGuideUi.cancel();
-  guides = { ...DEFAULT_GUIDES };
-  renderGuides();
-  updateResults();
-  announceResults();
-}
-
 function viewSize() {
   return {
     width: elements.measurementFrame.clientWidth,
@@ -694,245 +682,39 @@ function updateImageCanvasSize() {
   if (!fitted.width || !fitted.height) return;
   elements.imageCanvas.style.width = `${fitted.width}px`;
   elements.imageCanvas.style.height = `${fitted.height}px`;
-  const { width, height, contentWidth, contentHeight } = viewSize();
-  viewState = clampViewState(viewState, width, height, contentWidth, contentHeight);
+  measurementViewport?.reconcile({ render: false });
   renderView();
 }
 
 function renderView() {
-  const inverseZoom = 1 / viewState.zoom;
-  const localGuideWidth = guideScreenWidth(viewState.zoom) * inverseZoom;
+  const state = measurementViewport?.getState() ?? { zoom: 1, panX: 0, panY: 0 };
+  const inverseZoom = 1 / state.zoom;
+  const localGuideWidth = guideScreenWidth(state.zoom) * inverseZoom;
 
-  elements.measurementFrame.style.setProperty("--canvas-zoom", viewState.zoom.toFixed(4));
-  elements.measurementFrame.style.setProperty("--canvas-pan-x", `${viewState.panX.toFixed(2)}px`);
-  elements.measurementFrame.style.setProperty("--canvas-pan-y", `${viewState.panY.toFixed(2)}px`);
+  elements.measurementFrame.style.setProperty("--canvas-zoom", state.zoom.toFixed(4));
+  elements.measurementFrame.style.setProperty("--canvas-pan-x", `${state.panX.toFixed(2)}px`);
+  elements.measurementFrame.style.setProperty("--canvas-pan-y", `${state.panY.toFixed(2)}px`);
   elements.measurementFrame.style.setProperty("--guide-inverse-zoom", inverseZoom.toFixed(4));
   elements.measurementFrame.style.setProperty("--guide-active-scale", (inverseZoom * 1.12).toFixed(4));
   elements.measurementFrame.style.setProperty("--guide-line-width", `${localGuideWidth.toFixed(3)}px`);
   elements.measurementFrame.style.setProperty("--guide-shadow-size", `${(3 * inverseZoom).toFixed(3)}px`);
-  elements.measurementFrame.classList.toggle("is-zoomed", viewState.zoom > MIN_VIEW_ZOOM);
-
-  const percentage = `${Math.round(viewState.zoom * 100)}%`;
-  elements.zoomValue.textContent = percentage;
-  elements.zoomResetButton.setAttribute("aria-label", `恢复为 100%，当前 ${percentage}`);
-  elements.zoomOutButton.disabled = viewState.zoom <= MIN_VIEW_ZOOM;
-  elements.zoomInButton.disabled = viewState.zoom >= MAX_VIEW_ZOOM;
 }
 
-function setView(nextState) {
-  const { width, height, contentWidth, contentHeight } = viewSize();
-  viewState = clampViewState(nextState, width, height, contentWidth, contentHeight);
-  scheduleViewRender();
-}
-
-function resetView() {
-  cancelImageGestures();
-  setView({ zoom: MIN_VIEW_ZOOM, panX: 0, panY: 0 });
-}
-
-function zoomAtPoint(requestedZoom, clientX, clientY) {
-  const rect = elements.measurementFrame.getBoundingClientRect();
-  const { width, height, contentWidth, contentHeight } = viewSize();
-  const focalX = clientX - (rect.left + rect.width / 2);
-  const focalY = clientY - (rect.top + rect.height / 2);
-  viewState = zoomViewAt(
-    viewState,
-    requestedZoom,
-    focalX,
-    focalY,
+function correctionViewSize() {
+  const width = elements.correctionFrame.clientWidth;
+  const height = elements.correctionFrame.clientHeight;
+  const fitted = computeContainSize(
     width,
     height,
-    contentWidth,
-    contentHeight,
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
   );
-  scheduleViewRender();
-}
-
-function zoomAtCenter(requestedZoom) {
-  const { width, height, contentWidth, contentHeight } = viewSize();
-  viewState = zoomViewAt(
-    viewState,
-    requestedZoom,
-    0,
-    0,
-    width,
-    height,
-    contentWidth,
-    contentHeight,
-  );
-  scheduleViewRender();
-}
-
-function pointerPairMetrics() {
-  const [first, second] = [...imagePointers.values()];
-  if (!first || !second) return null;
-
-  const rect = elements.measurementFrame.getBoundingClientRect();
-  const deltaX = second.x - first.x;
-  const deltaY = second.y - first.y;
   return {
-    distance: Math.hypot(deltaX, deltaY),
-    center: {
-      x: ((first.x + second.x) / 2) - (rect.left + rect.width / 2),
-      y: ((first.y + second.y) / 2) - (rect.top + rect.height / 2),
-    },
+    width,
+    height,
+    contentWidth: fitted.width,
+    contentHeight: fitted.height,
   };
-}
-
-function startPinchGesture() {
-  const metrics = pointerPairMetrics();
-  if (!metrics || !(metrics.distance > 0)) return;
-  pinchGesture = {
-    state: { ...viewState },
-    distance: metrics.distance,
-    center: metrics.center,
-  };
-  panGesture = null;
-  elements.measurementFrame.classList.add("is-panning");
-}
-
-function beginImageGesture(event) {
-  if (event.target.closest(".guide")) return;
-  if (event.pointerType === "mouse" && event.button !== 0) return;
-  if (event.pointerType === "mouse" && viewState.zoom <= MIN_VIEW_ZOOM) return;
-
-  imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  elements.measurementFrame.setPointerCapture(event.pointerId);
-
-  if (imagePointers.size === 1) {
-    panGesture = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      state: { ...viewState },
-    };
-    if (viewState.zoom > MIN_VIEW_ZOOM) {
-      elements.measurementFrame.classList.add("is-panning");
-    }
-  } else if (imagePointers.size === 2) {
-    startPinchGesture();
-  }
-
-  event.preventDefault();
-}
-
-function moveImageGesture(event) {
-  if (!imagePointers.has(event.pointerId)) return;
-  if (pointerButtonsAreReleased(event)) {
-    endImageGesture(event);
-    return;
-  }
-  imagePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  const { width, height, contentWidth, contentHeight } = viewSize();
-
-  if (imagePointers.size >= 2 && pinchGesture) {
-    const metrics = pointerPairMetrics();
-    if (metrics) {
-      viewState = pinchView(
-        pinchGesture.state,
-        pinchGesture.distance,
-        pinchGesture.center,
-        metrics.distance,
-        metrics.center,
-        width,
-        height,
-        contentWidth,
-        contentHeight,
-      );
-      scheduleViewRender();
-    }
-  } else if (panGesture?.pointerId === event.pointerId) {
-    viewState = panView(
-      panGesture.state,
-      event.clientX - panGesture.x,
-      event.clientY - panGesture.y,
-      width,
-      height,
-      contentWidth,
-      contentHeight,
-    );
-    scheduleViewRender();
-  }
-
-  event.preventDefault();
-}
-
-function endImageGesture(event) {
-  if (!imagePointers.has(event.pointerId)) return;
-  imagePointers.delete(event.pointerId);
-  if (event.type !== "lostpointercapture") {
-    releasePointerCapture(elements.measurementFrame, event.pointerId);
-  }
-
-  if (imagePointers.size === 1) {
-    const [pointerId, point] = imagePointers.entries().next().value;
-    panGesture = { pointerId, x: point.x, y: point.y, state: { ...viewState } };
-    pinchGesture = null;
-  } else if (imagePointers.size === 0) {
-    panGesture = null;
-    pinchGesture = null;
-    elements.measurementFrame.classList.remove("is-panning");
-  } else {
-    startPinchGesture();
-  }
-}
-
-function cancelImageGestures({ releaseCapture = true } = {}) {
-  const pointerIds = [...imagePointers.keys()];
-  imagePointers.clear();
-  panGesture = null;
-  pinchGesture = null;
-  elements.measurementFrame.classList.remove("is-panning");
-  if (releaseCapture) {
-    pointerIds.forEach((pointerId) => releasePointerCapture(elements.measurementFrame, pointerId));
-  }
-}
-
-function handleImageWheel(event) {
-  const pageScale = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-    ? elements.measurementFrame.clientHeight
-    : event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
-  const factor = Math.exp(-event.deltaY * pageScale * 0.002);
-  zoomAtPoint(viewState.zoom * factor, event.clientX, event.clientY);
-  event.preventDefault();
-}
-
-function handleImageDoubleClick(event) {
-  if (event.target.closest(".guide")) return;
-  const requestedZoom = viewState.zoom < 2 ? 2 : MIN_VIEW_ZOOM;
-  zoomAtPoint(requestedZoom, event.clientX, event.clientY);
-  event.preventDefault();
-}
-
-function handleImageKeydown(event) {
-  if (event.target !== elements.measurementFrame) return;
-
-  if (event.key === "+" || event.key === "=") {
-    zoomAtCenter(viewState.zoom + VIEW_ZOOM_STEP);
-  } else if (event.key === "-") {
-    zoomAtCenter(viewState.zoom - VIEW_ZOOM_STEP);
-  } else if (event.key === "0") {
-    resetView();
-  } else if (event.key.startsWith("Arrow") && viewState.zoom > MIN_VIEW_ZOOM) {
-    const distance = event.shiftKey ? 48 : 16;
-    const deltaX = event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0;
-    const deltaY = event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0;
-    const { width, height, contentWidth, contentHeight } = viewSize();
-    viewState = panView(
-      viewState,
-      deltaX,
-      deltaY,
-      width,
-      height,
-      contentWidth,
-      contentHeight,
-    );
-    scheduleViewRender();
-  } else {
-    return;
-  }
-
-  event.preventDefault();
 }
 
 function clipboardFile(blob) {
@@ -1072,32 +854,39 @@ function renderCorrectionOverlay() {
 function drawCorrectionSource() {
   const width = elements.correctionFrame.clientWidth;
   const height = elements.correctionFrame.clientHeight;
-  if (!width || !height || !elements.sourceImage.naturalWidth) return;
+  const layout = computeZoomedContainRect(
+    width,
+    height,
+    elements.sourceImage.naturalWidth,
+    elements.sourceImage.naturalHeight,
+    correctionViewport?.getState(),
+  );
+  if (!width || !height || !layout.contentWidth || !layout.contentHeight) return;
+  correctionViewport?.setState(layout.viewState, { render: false });
   const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
   elements.correctionCanvas.width = Math.round(width * pixelRatio);
   elements.correctionCanvas.height = Math.round(height * pixelRatio);
   const context = elements.correctionCanvas.getContext("2d", { alpha: true });
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, width, height);
-  const fitted = computeContainSize(
-    width,
-    height,
-    elements.sourceImage.naturalWidth,
-    elements.sourceImage.naturalHeight,
-  );
   correctionPreviewRect = {
-    left: (width - fitted.width) / 2,
-    top: (height - fitted.height) / 2,
-    width: fitted.width,
-    height: fitted.height,
+    left: layout.left,
+    top: layout.top,
+    width: layout.width,
+    height: layout.height,
   };
   context.drawImage(
     elements.sourceImage,
     correctionPreviewRect.left,
     correctionPreviewRect.top,
-    fitted.width,
-    fitted.height,
+    layout.width,
+    layout.height,
   );
+}
+
+function renderCorrectionViewport() {
+  drawCorrectionSource();
+  renderCorrectionOverlay();
 }
 
 function setCorrectionBusy(busy) {
@@ -1160,6 +949,7 @@ async function restoreOriginalImage() {
     correctionRecipe = createOriginalRestoreRecipe();
     await displaySourceImage(restoredSession.correctionBlob);
     imageSession = restoredSession;
+    correctionViewport?.reset({ render: false });
     drawCorrectionSource();
     renderCorrectionUi();
     elements.resultAnnouncer.textContent = "已还原到最初上传的图片。应用校正可保存还原，取消可保留当前工作图。";
@@ -1296,13 +1086,15 @@ function endCornerDrag(event) {
 
 function endActivePointerInteractions(event) {
   endGuideDrag(event);
-  endImageGesture(event);
+  measurementViewport?.endPointer(event);
+  correctionViewport?.endPointer(event);
   endCornerDrag(event);
 }
 
 function cancelActivePointerInteractions() {
   finishGuideDrag(undefined, { releaseCapture: false, announce: false });
-  cancelImageGestures({ releaseCapture: false });
+  measurementViewport?.cancel({ releaseCapture: false });
+  correctionViewport?.cancel({ releaseCapture: false });
   finishCornerDrag(undefined, { releaseCapture: false });
   showOriginalCorrectionPreview();
 }
@@ -1323,6 +1115,7 @@ async function openCorrection() {
   }
   imageSession = imageTools.beginImageCorrection(imageSession);
   correctionRecipe = correctionTools.createCorrectionRecipe();
+  correctionViewport?.reset({ render: false });
   showView(elements.correctionView);
   window.requestAnimationFrame(() => {
     drawCorrectionSource();
@@ -1332,6 +1125,7 @@ async function openCorrection() {
 
 async function cancelCorrection() {
   if (!imageSession?.workingBlob) return;
+  correctionViewport?.cancel();
   hideCorrectionLoupe();
   showOriginalCorrectionPreview();
   imageSession = imageTools.beginImageCorrection(imageSession);
@@ -1350,6 +1144,7 @@ function showOriginalCorrectionPreview() {
 function showCorrectedCorrectionPreview(event) {
   if (!correctionTools || !correctionRecipe) return;
   if (!correctionTools.isConvexQuad(correctionRecipe.quad)) return;
+  correctionViewport?.cancel();
   const size = correctionTools.correctionOutputSize(
     elements.sourceImage.naturalWidth,
     elements.sourceImage.naturalHeight,
@@ -1385,6 +1180,7 @@ async function applyCorrection() {
     return;
   }
   setCorrectionBusy(true);
+  correctionViewport?.cancel();
   await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
   try {
@@ -1413,7 +1209,7 @@ async function applyCorrection() {
     showView(elements.editorView);
     window.requestAnimationFrame(() => {
       updateImageCanvasSize();
-      resetView();
+      measurementViewport?.reset();
       notifyUser("图片校正已应用", "外沿参考线已贴合图片边缘，请继续对齐图案内沿。");
     });
   } catch (error) {
@@ -1458,10 +1254,39 @@ const scheduleCorrectionDragUi = createFrameScheduler((loupeState) => {
     );
   }
 }, window);
+const scheduleCorrectionViewport = createFrameScheduler(renderCorrectionViewport, window);
 const scheduleCorrectionLayout = createFrameScheduler(() => {
   drawCorrectionSource();
   renderCorrectionUi();
 }, window);
+
+measurementViewport = createViewportController({
+  frame: elements.measurementFrame,
+  controls: {
+    zoomOutButton: elements.zoomOutButton,
+    zoomResetButton: elements.zoomResetButton,
+    zoomInButton: elements.zoomInButton,
+    zoomValue: elements.zoomValue,
+  },
+  getMetrics: viewSize,
+  requestRender: scheduleViewRender,
+  ignoreSelector: ".guide",
+});
+correctionViewport = createViewportController({
+  frame: elements.correctionFrame,
+  controls: {
+    zoomOutButton: elements.correctionZoomOutButton,
+    zoomResetButton: elements.correctionZoomResetButton,
+    zoomInButton: elements.correctionZoomInButton,
+    zoomValue: elements.correctionZoomValue,
+  },
+  getMetrics: correctionViewSize,
+  requestRender: scheduleCorrectionViewport,
+  ignoreSelector: ".corner-handle",
+  canInteract: () => elements.correctionResultCanvas.hidden,
+  onInteractionStart: hideCorrectionLoupe,
+  resetLabel: "恢复裁剪图片",
+});
 
 elements.chooseImageButton.addEventListener("click", requestImage);
 elements.changeImageButton.addEventListener("click", requestImage);
@@ -1471,20 +1296,8 @@ elements.pasteImageButton.addEventListener("click", pasteImageFromButton);
 elements.fileInput.addEventListener("change", handleFileInput);
 elements.cameraInput.addEventListener("change", handleFileInput);
 elements.correctImageButton.addEventListener("click", openCorrection);
-elements.resetGuidesButton.addEventListener("click", resetGuides);
 elements.psaFrontButton.addEventListener("click", () => setPsaSide("front"));
 elements.psaBackButton.addEventListener("click", () => setPsaSide("back"));
-elements.zoomOutButton.addEventListener("click", () => zoomAtCenter(viewState.zoom - VIEW_ZOOM_STEP));
-elements.zoomResetButton.addEventListener("click", resetView);
-elements.zoomInButton.addEventListener("click", () => zoomAtCenter(viewState.zoom + VIEW_ZOOM_STEP));
-elements.measurementFrame.addEventListener("pointerdown", beginImageGesture);
-elements.measurementFrame.addEventListener("pointermove", moveImageGesture);
-elements.measurementFrame.addEventListener("pointerup", endImageGesture);
-elements.measurementFrame.addEventListener("pointercancel", endImageGesture);
-elements.measurementFrame.addEventListener("lostpointercapture", endImageGesture);
-elements.measurementFrame.addEventListener("wheel", handleImageWheel, { passive: false });
-elements.measurementFrame.addEventListener("dblclick", handleImageDoubleClick);
-elements.measurementFrame.addEventListener("keydown", handleImageKeydown);
 elements.correctionResetButton.addEventListener("click", restoreOriginalImage);
 elements.correctionResetButtonBottom.addEventListener("click", restoreOriginalImage);
 elements.correctionCancelButton.addEventListener("click", cancelCorrection);
@@ -1521,7 +1334,10 @@ window.addEventListener("beforeunload", () => {
   scheduleViewRender.cancel();
   scheduleMeasurementLayout.cancel();
   scheduleCorrectionDragUi.cancel();
+  scheduleCorrectionViewport.cancel();
   scheduleCorrectionLayout.cancel();
+  measurementViewport?.destroy();
+  correctionViewport?.destroy();
   if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
 });
 window.addEventListener("paste", handlePaste);

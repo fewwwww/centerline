@@ -193,7 +193,12 @@
 
           <div class="correction-workspace">
             <div class="correction-preview-card">
-              <div class="correction-frame" id="correction-frame">
+              <div
+                class="correction-frame"
+                id="correction-frame"
+                tabindex="0"
+                aria-label="裁剪图片预览，滚轮或双指缩放，放大后拖动图片"
+              >
                 <canvas id="correction-canvas" aria-label="图片裁剪与透视校正预览"></canvas>
                 <canvas id="correction-result-canvas" aria-label="校正后的效果预览" hidden></canvas>
                 <div class="correction-handles" id="correction-handles" aria-label="裁剪角点"></div>
@@ -212,7 +217,15 @@
 
               <button class="compare-button" id="correction-compare-button" type="button">按住预览校正</button>
 
-              <p class="correction-note" id="correction-renderer-note">拖动四角即可裁剪并自动拉正。所有运算均在浏览器本地完成。</p>
+              <div class="zoom-controls zoom-controls-panel" role="group" aria-label="裁剪图片缩放">
+                <button class="zoom-button" id="correction-zoom-out-button" type="button" aria-label="缩小裁剪图片" title="缩小裁剪图片">−</button>
+                <button class="zoom-value" id="correction-zoom-reset-button" type="button" aria-label="恢复裁剪图片为 100%" title="恢复裁剪图片为 100%">
+                  <span id="correction-zoom-value">100%</span>
+                </button>
+                <button class="zoom-button" id="correction-zoom-in-button" type="button" aria-label="放大裁剪图片" title="放大裁剪图片">＋</button>
+              </div>
+
+              <p class="correction-note" id="correction-renderer-note">拖动四角即可裁剪并自动拉正；滚轮或双指缩放，放大后拖动图片定位。</p>
               <div class="correction-actions correction-actions-bottom">
                 <button class="button button-secondary" id="correction-reset-button-bottom" type="button">还原原图</button>
                 <button class="button button-secondary" id="correction-cancel-button-bottom" type="button">取消</button>
@@ -231,9 +244,6 @@
             </div>
             <div class="editor-actions">
               <button class="button button-secondary compact" id="correct-image-button" type="button">四角裁剪</button>
-              <button class="button button-secondary compact" id="reset-guides-button" type="button">
-                重置参考线
-              </button>
               <button class="button button-dark compact" id="change-image-button" type="button">更换图片</button>
             </div>
           </div>

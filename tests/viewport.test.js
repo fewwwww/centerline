@@ -7,6 +7,7 @@ import {
   clampViewState,
   computeContainSize,
   computeMeasurementImageSize,
+  computeZoomedContainRect,
   correctionLoupeGuideSegments,
   correctionLoupeSourceRect,
   guideLoupePoint,
@@ -80,6 +81,37 @@ test("measurement sizing keeps outer guide handles inside the clipped viewport",
   const widthLimited = computeMeasurementImageSize(390, 600, 1600, 900);
   assert.ok(((390 - widthLimited.width) / 2) >= 18);
   assert.ok(((600 - widthLimited.height) / 2) >= 18);
+});
+
+test("correction zoom keeps normalized crop points attached to the transformed image", () => {
+  const layout = computeZoomedContainRect(
+    400,
+    600,
+    1000,
+    1500,
+    { zoom: 2, panX: 25, panY: -30 },
+  );
+
+  assert.deepEqual(layout, {
+    left: -175,
+    top: -330,
+    width: 800,
+    height: 1200,
+    contentWidth: 400,
+    contentHeight: 600,
+    viewState: { zoom: 2, panX: 25, panY: -30 },
+  });
+
+  const sourcePoint = { x: 0.25, y: 0.75 };
+  const screenPoint = {
+    x: layout.left + (sourcePoint.x * layout.width),
+    y: layout.top + (sourcePoint.y * layout.height),
+  };
+  assert.deepEqual(screenPoint, { x: 25, y: 570 });
+  assert.deepEqual({
+    x: (screenPoint.x - layout.left) / layout.width,
+    y: (screenPoint.y - layout.top) / layout.height,
+  }, sourcePoint);
 });
 
 test("zoomed portrait content can move its edge into the central safe area", () => {

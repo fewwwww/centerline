@@ -27,6 +27,7 @@ const publicFiles = [
   "src/measurement.js",
   "src/perspective.js",
   "src/viewport.js",
+  "src/viewport-controller.js",
 ];
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL);
 

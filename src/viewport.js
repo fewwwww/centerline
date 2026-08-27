@@ -41,6 +41,34 @@ export function computeMeasurementImageSize(
   );
 }
 
+export function computeZoomedContainRect(
+  viewportWidth,
+  viewportHeight,
+  imageWidth,
+  imageHeight,
+  state,
+) {
+  const fitted = computeContainSize(viewportWidth, viewportHeight, imageWidth, imageHeight);
+  const viewState = clampViewState(
+    state,
+    viewportWidth,
+    viewportHeight,
+    fitted.width,
+    fitted.height,
+  );
+  const width = fitted.width * viewState.zoom;
+  const height = fitted.height * viewState.zoom;
+  return {
+    left: ((viewportWidth - width) / 2) + viewState.panX,
+    top: ((viewportHeight - height) / 2) + viewState.panY,
+    width,
+    height,
+    contentWidth: fitted.width,
+    contentHeight: fitted.height,
+    viewState,
+  };
+}
+
 function maximumPan(contentSize, viewportSize, zoom) {
   if (zoom <= MIN_VIEW_ZOOM) return 0;
   const scaledSize = Math.max(0, contentSize || 0) * zoom;
