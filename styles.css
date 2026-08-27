@@ -405,15 +405,6 @@ main {
   gap: 9px;
 }
 
-.example-kicker {
-  margin: 0;
-  color: #7f9aff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: 0.15em;
-}
-
 .example-readout h2 {
   margin: 0;
   color: #fff;
@@ -436,8 +427,7 @@ main {
   background: rgba(255, 255, 255, 0.06);
 }
 
-.example-ratios span,
-.example-grade span {
+.example-ratios span {
   display: block;
   color: rgba(255, 255, 255, 0.58);
   font-size: 8px;
@@ -453,33 +443,6 @@ main {
   line-height: 1.1;
   white-space: nowrap;
 }
-
-.example-grade {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 7px 10px;
-  color: #11150f;
-  border-radius: 9px;
-  background: #f6f8f2;
-}
-
-.example-grade span { color: #62685f; }
-.example-grade strong {
-  color: #11150f;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 16px;
-}
-
-.example-explanation {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.example-explanation b { color: #fff; }
 
 .upload-kicker {
   margin: 0 0 8px;
@@ -1749,22 +1712,6 @@ noscript {
     font-size: 13px;
   }
 
-  .example-grade {
-    padding: 5px 8px;
-  }
-
-  .example-grade strong {
-    font-size: 14px;
-  }
-
-  .example-explanation {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    font-size: 8px;
-  }
-
   .upload-actions {
     grid-template-columns: 1fr;
     margin-top: 12px;
@@ -1886,17 +1833,12 @@ noscript {
     height: 94px;
   }
 
-  .example-explanation {
-    display: none;
-  }
-
   .example-readout h2 {
     font-size: 0.6875rem;
     white-space: nowrap;
   }
 
-  .example-ratios > div,
-  .example-grade {
+  .example-ratios > div {
     padding-block: 4px;
   }
 
