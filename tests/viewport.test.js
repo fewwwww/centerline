@@ -13,6 +13,7 @@ import {
   guideLoupePoint,
   guideLoupeSegment,
   guideScreenWidth,
+  nudgeNormalizedPoint,
   pointerButtonsAreReleased,
   panView,
   pinchView,
@@ -157,11 +158,11 @@ test("correction loupe samples a magnified square centered on the dragged point"
   assert.equal(correctionLoupeSourceRect({ x: 0.5, y: 0.5 }, 1000, 1500, 0, 450), null);
 });
 
-test("guide loupe samples the circular handle and keeps its guide centered", () => {
-  assert.deepEqual(guideLoupePoint("x", 0.28, 0.42), { x: 0.28, y: 0.42 });
-  assert.deepEqual(guideLoupePoint("y", 0.73, 0.58), { x: 0.58, y: 0.73 });
-  assert.deepEqual(guideLoupePoint("x", -1, 2), { x: 0, y: 1 });
-  assert.equal(guideLoupePoint("z", 0.5, 0.5), null);
+test("guide loupe follows the pointer along the guide and keeps the guide centered", () => {
+  assert.deepEqual(guideLoupePoint("x", 0.28, 0.91, 0.42), { x: 0.28, y: 0.42 });
+  assert.deepEqual(guideLoupePoint("y", 0.73, 0.58, 0.09), { x: 0.58, y: 0.73 });
+  assert.deepEqual(guideLoupePoint("x", -1, -3, 2), { x: 0, y: 1 });
+  assert.equal(guideLoupePoint("z", 0.5, 0.5, 0.5), null);
 
   assert.deepEqual(guideLoupeSegment("x", 100), {
     start: { x: 50, y: 0 },
@@ -172,6 +173,18 @@ test("guide loupe samples the circular handle and keeps its guide centered", () 
     end: { x: 100, y: 50 },
   });
   assert.equal(guideLoupeSegment("z", 100), null);
+});
+
+test("one-pixel nudges use preview pixels and stay inside crop bounds", () => {
+  assert.deepEqual(
+    nudgeNormalizedPoint({ x: 0.5, y: 0.5 }, -1, 1, 200, 400),
+    { x: 0.495, y: 0.5025 },
+  );
+  assert.deepEqual(
+    nudgeNormalizedPoint({ x: 0.006, y: 0.994 }, -10, 10, 200, 400, 0.005, 0.995),
+    { x: 0.005, y: 0.995 },
+  );
+  assert.equal(nudgeNormalizedPoint({ x: 0.5, y: 0.5 }, 1, 1, 0, 400), null);
 });
 
 test("correction loupe guides follow both dashed edges beside every dragged corner", () => {

@@ -217,6 +217,16 @@
                 <button class="zoom-button" id="correction-zoom-in-button" type="button" aria-label="放大裁剪图片" title="放大裁剪图片">＋</button>
               </div>
 
+              <div class="precision-nudge" id="correction-nudge" aria-label="裁剪角点微调">
+                <span class="precision-nudge-label" id="correction-nudge-label">先点一个角点</span>
+                <div class="precision-nudge-buttons" role="group" aria-label="每次移动一个画面像素">
+                  <button type="button" data-dx="-1" data-dy="0" aria-label="向左微调一个像素" disabled>←</button>
+                  <button type="button" data-dx="0" data-dy="-1" aria-label="向上微调一个像素" disabled>↑</button>
+                  <button type="button" data-dx="0" data-dy="1" aria-label="向下微调一个像素" disabled>↓</button>
+                  <button type="button" data-dx="1" data-dy="0" aria-label="向右微调一个像素" disabled>→</button>
+                </div>
+              </div>
+
               <p class="correction-note" id="correction-renderer-note">拖动四角即可裁剪并自动拉正；滚轮或双指缩放，放大后拖动图片定位。</p>
               <div class="correction-actions correction-actions-bottom">
                 <button class="button button-secondary" id="correction-reset-button-bottom" type="button">还原原图</button>
@@ -308,6 +318,15 @@
                   </button>
                   <button class="zoom-button" id="zoom-in-button" type="button" aria-label="放大图片" title="放大图片">＋</button>
                 </div>
+                <div class="precision-nudge precision-nudge-overlay" id="guide-nudge" aria-label="参考线微调" hidden>
+                  <span class="precision-nudge-label" id="guide-nudge-label">先点一条参考线</span>
+                  <div class="precision-nudge-buttons" role="group" aria-label="每次移动一个画面像素">
+                    <button type="button" data-dx="-1" data-dy="0" aria-label="向左微调一个像素" disabled>←</button>
+                    <button type="button" data-dx="0" data-dy="-1" aria-label="向上微调一个像素" disabled>↑</button>
+                    <button type="button" data-dx="0" data-dy="1" aria-label="向下微调一个像素" disabled>↓</button>
+                    <button type="button" data-dx="1" data-dy="0" aria-label="向右微调一个像素" disabled>→</button>
+                  </div>
+                </div>
                 <div
                   class="measurement-frame"
                   id="measurement-frame"
@@ -327,7 +346,7 @@
               </div>
               <p class="image-caption" id="image-caption">
                 <span class="caption-icon" aria-hidden="true">↔</span>
-                滚轮或双指缩放，拖动图片定位；圆形手柄只调整参考线。
+                滚轮或双指缩放，拖动图片定位；点选参考线后可逐像素微调。
               </p>
             </div>
           </div>

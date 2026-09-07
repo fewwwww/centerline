@@ -320,6 +320,25 @@ test("correction view has independent zoom and pan without covering crop corners
   );
 });
 
+test("crop corners and guides share accessible one-pixel precision controls", async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL("index.html", projectUrl), "utf8"),
+    readFile(new URL("src/app.js", projectUrl), "utf8"),
+    readFile(new URL("styles.css", projectUrl), "utf8"),
+  ]);
+
+  assert.match(html, /id="guide-nudge"/);
+  assert.match(html, /id="correction-nudge"/);
+  assert.equal((html.match(/aria-label="向(?:左|右|上|下)微调一个像素"/g) || []).length, 8);
+  assert.match(app, /inspectionPoint = \{[\s\S]*?event\.clientX[\s\S]*?event\.clientY/);
+  assert.match(app, /nudgeNormalizedPoint\([\s\S]*?correctionPreviewRect\.width/);
+  assert.match(styles, /\.precision-nudge-buttons button\s*\{[\s\S]*?min-height:\s*44px/);
+  assert.match(
+    styles,
+    /@media \(max-width: 640px\)[\s\S]*?\.image-stage\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0, 1fr\)/,
+  );
+});
+
 test("homepage measurement example keeps the full card inside its responsive row", async () => {
   const styles = await readFile(new URL("styles.css", projectUrl), "utf8");
 

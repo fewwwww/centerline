@@ -21,6 +21,7 @@ import {
   guideLoupePoint,
   guideLoupeSegment,
   guideScreenWidth,
+  nudgeNormalizedPoint,
   pointerButtonsAreReleased,
   positionCorrectionLoupe,
 } from "./viewport.js";
@@ -67,12 +68,15 @@ const elements = {
   uploadErrorDetail: document.querySelector("#upload-error-detail"),
   changeImageButton: document.querySelector("#change-image-button"),
   correctImageButton: document.querySelector("#correct-image-button"),
+  imageStage: document.querySelector("#image-stage"),
   measurementFrame: document.querySelector("#measurement-frame"),
   imageCanvas: document.querySelector("#image-canvas"),
   guideLayer: document.querySelector("#guide-layer"),
   guideLoupe: document.querySelector("#guide-loupe"),
   guideLoupeCanvas: document.querySelector("#guide-loupe-canvas"),
   guideLoupeLabel: document.querySelector("#guide-loupe-label"),
+  guideNudge: document.querySelector("#guide-nudge"),
+  guideNudgeLabel: document.querySelector("#guide-nudge-label"),
   sourceImage: document.querySelector("#source-image"),
   zoomOutButton: document.querySelector("#zoom-out-button"),
   zoomResetButton: document.querySelector("#zoom-reset-button"),
@@ -97,6 +101,8 @@ const elements = {
   correctionLoupe: document.querySelector("#correction-loupe"),
   correctionLoupeCanvas: document.querySelector("#correction-loupe-canvas"),
   correctionLoupeLabel: document.querySelector("#correction-loupe-label"),
+  correctionNudge: document.querySelector("#correction-nudge"),
+  correctionNudgeLabel: document.querySelector("#correction-nudge-label"),
   correctionCompareButton: document.querySelector("#correction-compare-button"),
   correctionZoomOutButton: document.querySelector("#correction-zoom-out-button"),
   correctionZoomResetButton: document.querySelector("#correction-zoom-reset-button"),
@@ -118,6 +124,7 @@ let guides = { ...DEFAULT_GUIDES };
 let guideButtons = new Map();
 let guideColors = new Map();
 let activeDrag = null;
+let guideSelection = null;
 let currentImageUrl = null;
 let imageSession = null;
 let processingTimers = [];
@@ -129,6 +136,8 @@ let correctionRecipe = null;
 let correctionPreviewRect = { left: 0, top: 0, width: 0, height: 0 };
 let correctionViewport = null;
 let activeCornerDrag = null;
+let selectedCornerIndex = null;
+let nudgeLoupeTimer = null;
 let imageToolsPromise = null;
 let correctionToolsPromise = null;
 let imageTools = null;
@@ -327,6 +336,7 @@ async function handleFile(file, source = "file") {
 
     clearProcessingTimers();
     guides = { ...DEFAULT_GUIDES };
+    clearGuideSelection();
     renderGuides();
     updateResults();
     showView(elements.editorView);
@@ -373,7 +383,76 @@ function createGuideButton(meta) {
   button.addEventListener("pointercancel", endGuideDrag);
   button.addEventListener("lostpointercapture", endGuideDrag);
   button.addEventListener("keydown", handleGuideKeydown);
+  button.addEventListener("focus", () => selectGuide(meta.key));
   return button;
+}
+
+function setNudgeButtons(root, enabledDirections) {
+  root.querySelectorAll("button[data-dx][data-dy]").forEach((button) => {
+    const direction = `${button.dataset.dx},${button.dataset.dy}`;
+    button.disabled = !enabledDirections.has(direction);
+  });
+}
+
+function bindNudgeButtons(root, onNudge) {
+  root.querySelectorAll("button[data-dx][data-dy]").forEach((button) => {
+    button.addEventListener("click", () => {
+      onNudge(Number(button.dataset.dx), Number(button.dataset.dy));
+    });
+  });
+}
+
+function clearNudgeLoupeTimer() {
+  if (nudgeLoupeTimer !== null) window.clearTimeout(nudgeLoupeTimer);
+  nudgeLoupeTimer = null;
+}
+
+function keepNudgeLoupeVisible(hideLoupe) {
+  clearNudgeLoupeTimer();
+  nudgeLoupeTimer = window.setTimeout(() => {
+    nudgeLoupeTimer = null;
+    hideLoupe();
+  }, 1200);
+}
+
+function defaultGuideInspectionPoint(key) {
+  const meta = GUIDE_META_BY_KEY.get(key);
+  const axis = GUIDE_AXIS[key];
+  return guideLoupePoint(axis, guides[key], meta?.handle, meta?.handle);
+}
+
+function renderGuideSelection() {
+  guideButtons.forEach((button, key) => {
+    button.classList.toggle("is-selected", guideSelection?.key === key);
+  });
+  const axis = guideSelection ? GUIDE_AXIS[guideSelection.key] : null;
+  elements.guideNudge.hidden = !guideSelection;
+  elements.imageStage.classList.toggle("has-guide-selection", Boolean(guideSelection));
+  elements.guideNudgeLabel.textContent = guideSelection
+    ? `${GUIDE_META_BY_KEY.get(guideSelection.key)?.label} · 1px 微调`
+    : "先点一条参考线";
+  setNudgeButtons(
+    elements.guideNudge,
+    new Set(axis === "x" ? ["-1,0", "1,0"] : axis === "y" ? ["0,-1", "0,1"] : []),
+  );
+}
+
+function selectGuide(key, inspectionPoint = null) {
+  if (!GUIDE_META_BY_KEY.has(key)) return;
+  const selectionChanged = guideSelection?.key !== key;
+  guideSelection = {
+    key,
+    point: inspectionPoint || (guideSelection?.key === key
+      ? guideSelection.point
+      : defaultGuideInspectionPoint(key)),
+  };
+  if (selectionChanged) renderGuideSelection();
+}
+
+function clearGuideSelection() {
+  guideSelection = null;
+  hideGuideLoupe();
+  renderGuideSelection();
 }
 
 function mountGuides() {
@@ -394,6 +473,7 @@ function mountGuides() {
       rootStyle.getPropertyValue(GUIDE_COLOR_PROPERTY[meta.direction]).trim() || "#fff",
     );
   });
+  renderGuideSelection();
 }
 
 function renderGuide(key) {
@@ -413,8 +493,20 @@ function renderGuides() {
   guideButtons.forEach((_button, key) => renderGuide(key));
 }
 
-function applyGuideValue(key, value, loupeState = null) {
+function commitGuideValue(key, value, inspectionPoint = null) {
   guides = moveGuide(guides, key, value);
+  if (guideSelection?.key === key) {
+    const point = inspectionPoint || guideSelection.point;
+    guideSelection = {
+      key,
+      point: guideLoupePoint(GUIDE_AXIS[key], guides[key], point?.x, point?.y),
+    };
+  }
+  return guides[key];
+}
+
+function applyGuideValue(key, value, loupeState = null) {
+  commitGuideValue(key, value, loupeState?.inspectionPoint);
   scheduleGuideUi(key, loupeState ? { ...loupeState, key } : null);
 }
 
@@ -471,7 +563,8 @@ function drawLoupeImage(canvas, point, previewWidth, previewHeight) {
 function drawGuideLoupe(pointer, key, layerRect = elements.guideLayer.getBoundingClientRect()) {
   const meta = GUIDE_META_BY_KEY.get(key);
   const axis = GUIDE_AXIS[key];
-  const point = guideLoupePoint(axis, guides[key], meta?.handle);
+  const inspectionPoint = pointer.inspectionPoint || guideSelection?.point || defaultGuideInspectionPoint(key);
+  const point = guideLoupePoint(axis, guides[key], inspectionPoint?.x, inspectionPoint?.y);
   if (!meta || !point || !layerRect.width || !layerRect.height) return;
 
   const context = drawLoupeImage(
@@ -520,6 +613,7 @@ function beginGuideDrag(event) {
 
   const button = event.currentTarget;
   const key = button.dataset.guide;
+  clearNudgeLoupeTimer();
   activeDrag = { key, pointerId: event.pointerId, button };
   button.setPointerCapture(event.pointerId);
   button.classList.add("is-dragging");
@@ -533,13 +627,19 @@ function updateGuideFromPointer(event, key) {
   const rect = elements.guideLayer.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
+  const inspectionPoint = {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
+  selectGuide(key, inspectionPoint);
   const value = GUIDE_AXIS[key] === "x"
-    ? (event.clientX - rect.left) / rect.width
-    : (event.clientY - rect.top) / rect.height;
+    ? inspectionPoint.x
+    : inspectionPoint.y;
   applyGuideValue(key, value, {
     clientX: event.clientX,
     clientY: event.clientY,
     layerRect: rect,
+    inspectionPoint,
   });
 }
 
@@ -598,9 +698,40 @@ function handleGuideKeydown(event) {
 
   const dimension = axis === "x" ? rect.width : rect.height;
   if (!dimension) return;
-  applyGuideValue(key, guides[key] + (direction * stepPixels) / dimension);
-  scheduleAnnouncement();
+  selectGuide(key);
+  nudgeSelectedGuide(
+    axis === "x" ? direction : 0,
+    axis === "y" ? direction : 0,
+    stepPixels,
+  );
   event.preventDefault();
+}
+
+function guideLoupeState(key, rect = elements.guideLayer.getBoundingClientRect()) {
+  if (!guideSelection || guideSelection.key !== key || !rect.width || !rect.height) return null;
+  return {
+    clientX: rect.left + (guideSelection.point.x * rect.width),
+    clientY: rect.top + (guideSelection.point.y * rect.height),
+    layerRect: rect,
+    inspectionPoint: guideSelection.point,
+    key,
+  };
+}
+
+function nudgeSelectedGuide(deltaX, deltaY, pixels = 1) {
+  if (!guideSelection) return;
+  const { key } = guideSelection;
+  const axis = GUIDE_AXIS[key];
+  const direction = axis === "x" ? deltaX : deltaY;
+  if (!direction) return;
+  const rect = elements.guideLayer.getBoundingClientRect();
+  const dimension = axis === "x" ? rect.width : rect.height;
+  if (!dimension) return;
+
+  commitGuideValue(key, guides[key] + ((direction * pixels) / dimension));
+  scheduleGuideUi(key, guideLoupeState(key, rect));
+  keepNudgeLoupeVisible(hideGuideLoupe);
+  scheduleAnnouncement();
 }
 
 function renderAxis(result, output, container, bar) {
@@ -778,6 +909,32 @@ let correctionGridLines = [];
 let correctionHandleButtons = [];
 const CORNER_LABELS = ["左上角", "右上角", "右下角", "左下角"];
 
+function renderCornerSelection() {
+  correctionHandleButtons.forEach((button, index) => {
+    button.classList.toggle("is-selected", selectedCornerIndex === index);
+  });
+  elements.correctionNudgeLabel.textContent = selectedCornerIndex === null
+    ? "先点一个角点"
+    : `${CORNER_LABELS[selectedCornerIndex]} · 1px 微调`;
+  setNudgeButtons(
+    elements.correctionNudge,
+    new Set(selectedCornerIndex === null ? [] : ["-1,0", "0,-1", "0,1", "1,0"]),
+  );
+}
+
+function selectCorner(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= CORNER_LABELS.length) return;
+  if (selectedCornerIndex === index) return;
+  selectedCornerIndex = index;
+  renderCornerSelection();
+}
+
+function clearCornerSelection() {
+  selectedCornerIndex = null;
+  hideCorrectionLoupe();
+  renderCornerSelection();
+}
+
 function mountCorrectionHandles() {
   correctionOverlaySvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   correctionOverlaySvg.classList.add("correction-quad-overlay");
@@ -801,9 +958,12 @@ function mountCorrectionHandles() {
     button.addEventListener("pointerup", endCornerDrag);
     button.addEventListener("pointercancel", endCornerDrag);
     button.addEventListener("lostpointercapture", endCornerDrag);
+    button.addEventListener("focus", () => selectCorner(index));
+    button.addEventListener("keydown", handleCornerKeydown);
     elements.correctionHandles.append(button);
     return button;
   });
+  renderCornerSelection();
 }
 
 function setSvgLine(line, start, end) {
@@ -1016,9 +1176,12 @@ function drawCorrectionLoupe(point, pointerX, pointerY, cornerIndex, recipe = co
 function beginCornerDrag(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
   const button = event.currentTarget;
+  const index = Number(button.dataset.corner);
+  clearNudgeLoupeTimer();
+  selectCorner(index);
   activeCornerDrag = {
     pointerId: event.pointerId,
-    index: Number(button.dataset.corner),
+    index,
     button,
   };
   button.classList.add("is-dragging");
@@ -1084,6 +1247,48 @@ function endCornerDrag(event) {
   });
 }
 
+function nudgeSelectedCorner(deltaX, deltaY) {
+  if (selectedCornerIndex === null || !correctionRecipe) return;
+  const point = nudgeNormalizedPoint(
+    correctionRecipe.quad[selectedCornerIndex],
+    deltaX,
+    deltaY,
+    correctionPreviewRect.width,
+    correctionPreviewRect.height,
+    0.005,
+    0.995,
+  );
+  if (!point) return;
+  const nextQuad = correctionRecipe.quad.map((current, index) => (
+    index === selectedCornerIndex ? point : current
+  ));
+  if (!correctionTools.isConvexQuad(nextQuad)) return;
+
+  correctionRecipe = { ...correctionRecipe, quad: nextQuad };
+  const screenPoint = correctionPointToScreen(point);
+  scheduleCorrectionDragUi({
+    point,
+    pointerX: screenPoint.x,
+    pointerY: screenPoint.y,
+    cornerIndex: selectedCornerIndex,
+    recipe: correctionRecipe,
+  });
+  keepNudgeLoupeVisible(hideCorrectionLoupe);
+}
+
+function handleCornerKeydown(event) {
+  let deltaX = 0;
+  let deltaY = 0;
+  if (event.key === "ArrowLeft") deltaX = -1;
+  if (event.key === "ArrowRight") deltaX = 1;
+  if (event.key === "ArrowUp") deltaY = -1;
+  if (event.key === "ArrowDown") deltaY = 1;
+  if (!deltaX && !deltaY) return;
+  selectCorner(Number(event.currentTarget.dataset.corner));
+  nudgeSelectedCorner(deltaX, deltaY);
+  event.preventDefault();
+}
+
 function endActivePointerInteractions(event) {
   endGuideDrag(event);
   measurementViewport?.endPointer(event);
@@ -1115,6 +1320,7 @@ async function openCorrection() {
   }
   imageSession = imageTools.beginImageCorrection(imageSession);
   correctionRecipe = correctionTools.createCorrectionRecipe();
+  clearCornerSelection();
   correctionViewport?.reset({ render: false });
   showView(elements.correctionView);
   window.requestAnimationFrame(() => {
@@ -1126,6 +1332,7 @@ async function openCorrection() {
 async function cancelCorrection() {
   if (!imageSession?.workingBlob) return;
   correctionViewport?.cancel();
+  clearCornerSelection();
   hideCorrectionLoupe();
   showOriginalCorrectionPreview();
   imageSession = imageTools.beginImageCorrection(imageSession);
@@ -1204,6 +1411,7 @@ async function applyCorrection() {
     }
     await displayWorkingImage(correctedBlob);
     guides = { ...DEFAULT_GUIDES };
+    clearGuideSelection();
     renderGuides();
     updateResults();
     showView(elements.editorView);
@@ -1308,6 +1516,8 @@ elements.correctionCompareButton.addEventListener("pointerdown", showCorrectedCo
 elements.correctionCompareButton.addEventListener("pointerup", showOriginalCorrectionPreview);
 elements.correctionCompareButton.addEventListener("pointercancel", showOriginalCorrectionPreview);
 elements.correctionCompareButton.addEventListener("lostpointercapture", showOriginalCorrectionPreview);
+bindNudgeButtons(elements.guideNudge, nudgeSelectedGuide);
+bindNudgeButtons(elements.correctionNudge, nudgeSelectedCorner);
 elements.dropZone.addEventListener("dragenter", (event) => {
   event.preventDefault();
   setDropZoneActive(true);
@@ -1330,6 +1540,7 @@ elements.dropZone.addEventListener("drop", (event) => {
 
 window.addEventListener("beforeunload", () => {
   clearProcessingTimers();
+  clearNudgeLoupeTimer();
   scheduleGuideUi.cancel();
   scheduleViewRender.cancel();
   scheduleMeasurementLayout.cancel();

@@ -1023,6 +1023,96 @@ main {
   cursor: default;
 }
 
+.precision-nudge {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.precision-nudge-overlay {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 30;
+  max-width: calc(100% - 24px);
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(17, 21, 16, 0.88);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+}
+
+.precision-nudge-label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.precision-nudge-overlay .precision-nudge-label {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.precision-nudge-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(36px, 1fr));
+  overflow: hidden;
+  border: 1px solid rgba(21, 23, 18, 0.18);
+  border-radius: 10px;
+}
+
+.precision-nudge-buttons button {
+  display: grid;
+  min-width: 40px;
+  min-height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--ink);
+  border: 0;
+  border-left: 1px solid rgba(21, 23, 18, 0.12);
+  background: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.precision-nudge-buttons button:first-child {
+  border-left: 0;
+}
+
+.precision-nudge-buttons button:hover:not(:disabled),
+.precision-nudge-buttons button:focus-visible {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  outline: 0;
+  background: var(--accent);
+}
+
+.precision-nudge-buttons button:disabled {
+  color: rgba(21, 23, 18, 0.22);
+  cursor: default;
+}
+
+.precision-nudge-overlay .precision-nudge-buttons {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.precision-nudge-overlay .precision-nudge-buttons button {
+  color: #fff;
+  border-left-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.precision-nudge-overlay .precision-nudge-buttons button:disabled {
+  color: rgba(255, 255, 255, 0.25);
+}
+
 .measurement-frame {
   --canvas-zoom: 1;
   --canvas-pan-x: 0px;
@@ -1162,6 +1252,7 @@ main {
 }
 
 .guide.is-dragging .guide-handle,
+.guide.is-selected .guide-handle,
 .guide:focus-visible .guide-handle {
   box-shadow: 0 0 0 5px color-mix(in srgb, var(--guide-color) 32%, transparent), 0 6px 18px rgba(0, 0, 0, 0.5);
   transform: translate(-50%, -50%) scale(var(--guide-active-scale));
@@ -1370,6 +1461,10 @@ main {
   box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.2), 0 6px 22px rgba(0, 0, 0, 0.55);
 }
 
+.corner-handle.is-selected {
+  box-shadow: 0 0 0 5px rgba(40, 84, 255, 0.3), 0 6px 22px rgba(0, 0, 0, 0.55);
+}
+
 .correction-loupe,
 .guide-loupe {
   position: absolute;
@@ -1383,6 +1478,10 @@ main {
   border-radius: 50%;
   background: #0b0e0b;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.guide-loupe {
+  z-index: 40;
 }
 
 .correction-loupe canvas,
@@ -2254,17 +2353,48 @@ noscript {
   }
 
   .image-stage {
+    display: grid;
     padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     border-radius: 0;
   }
 
+  .precision-nudge-overlay {
+    position: relative;
+    bottom: auto;
+    left: auto;
+    z-index: 2;
+    display: flex;
+    max-width: none;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left));
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .precision-nudge-overlay .precision-nudge-buttons {
+    flex: 0 0 auto;
+  }
+
   .measurement-frame {
+    grid-row: 2;
     border-radius: 0;
   }
 
   .zoom-controls {
     top: 9px;
     right: max(9px, env(safe-area-inset-right));
+  }
+
+  .image-stage.has-guide-selection .zoom-controls {
+    top: 66px;
   }
 
   .correction-view {

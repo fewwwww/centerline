@@ -201,13 +201,31 @@ export function correctionLoupeSourceRect(
   };
 }
 
-export function guideLoupePoint(axis, value, handlePosition) {
+export function guideLoupePoint(axis, value, pointerX, pointerY) {
   if (axis !== "x" && axis !== "y") return null;
   const guideValue = clamp(Number(value) || 0, 0, 1);
-  const handleValue = clamp(Number(handlePosition) || 0, 0, 1);
+  const inspectionX = clamp(Number(pointerX) || 0, 0, 1);
+  const inspectionY = clamp(Number(pointerY) || 0, 0, 1);
   return axis === "x"
-    ? { x: guideValue, y: handleValue }
-    : { x: handleValue, y: guideValue };
+    ? { x: guideValue, y: inspectionY }
+    : { x: inspectionX, y: guideValue };
+}
+
+export function nudgeNormalizedPoint(
+  point,
+  deltaX,
+  deltaY,
+  displayWidth,
+  displayHeight,
+  minimum = 0,
+  maximum = 1,
+) {
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return null;
+  if (!(displayWidth > 0) || !(displayHeight > 0)) return null;
+  return {
+    x: clamp(point.x + (deltaX / displayWidth), minimum, maximum),
+    y: clamp(point.y + (deltaY / displayHeight), minimum, maximum),
+  };
 }
 
 export function guideLoupeSegment(axis, size = CORRECTION_LOUPE_SIZE) {
